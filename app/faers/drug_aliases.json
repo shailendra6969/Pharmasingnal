@@ -1,0 +1,15 @@
+{
+  "_comment": "Conservative exact-match drug alias table (upper-case keys). Extend only with documented equivalences; unknown names are NEVER guessed. Salt/form equivalences listed here are standard labeling equivalences, not inferred matches.",
+  "ASPIRIN [LYSINE]": "ASPIRIN",
+  "PARACETAMOL": "ACETAMINOPHEN",
+  "ACETAMINOPHEN [PARACETAMOL]": "ACETAMINOPHEN",
+  "METFORMIN HCL": "METFORMIN",
+  "METFORMIN HYDROCHLORIDE": "METFORMIN",
+  "ATORVASTATIN CALCIUM": "ATORVASTATIN",
+  "SODIUM VALPROATE": "VALPROIC ACID",
+  "LEVOTHYROXINE SODIUM": "LEVOTHYROXINE",
+  "OMEPRAZOLE MAGNESIUM": "OMEPRAZOLE",
+  "SERTRALINE HCL": "SERTRALINE",
+  "SERTRALINE HYDROCHLORIDE": "SERTRALINE",
+  "IBUPROFEN [DL]": "IBUPROFEN"
+}

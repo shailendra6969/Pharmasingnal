@@ -1,0 +1,23 @@
+# Secrets
+.env
+
+# Data (spec §55: large raw datasets out of Git)
+data/raw/
+data/processed/
+!data/samples/
+!data/samples/**
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Third-party reference datasets (licensed; re-download via scripts/validate_concordance.py)
+data/reference/

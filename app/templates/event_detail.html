@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+
+{% block title %}{{ profile.event }} — Adverse Reaction Profile{% endblock %}
+{% block meta_description %}FAERS profile for adverse event {{ profile.event }}, total report count, patient demographics, and top disproportionately associated drugs.{% endblock %}
+
+{% block content %}
+<section class="page-header" id="event-header">
+  <div>
+    <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
+      <a href="/signals" style="color:var(--text-muted); font-size:0.85rem; text-decoration:none;">&larr; Signal Explorer</a>
+      <span style="color:var(--text-muted);">&bull;</span>
+      <span class="badge badge-neutral">Adverse Event Term</span>
+    </div>
+    <h1 class="page-title">{{ profile.event }}</h1>
+    <p class="page-description">
+      FAERS Reaction Term Profile &bull; Reported in <strong>{{ "{:,}".format(profile.total_cases) }}</strong> individual adverse event reports.
+    </p>
+  </div>
+  <div style="display:flex; gap:0.75rem;">
+    <a href="/signals?event={{ profile.event }}" class="btn btn-primary btn-sm">
+      Explore All Signals for {{ profile.event }} &rarr;
+    </a>
+  </div>
+</section>
+
+<!-- Event KPI Summary -->
+<section class="stats-grid" id="event-kpis">
+  <div class="glass-card stat-card">
+    <div class="stat-label">Total Reports</div>
+    <div class="stat-value stat-highlight-cyan">{{ "{:,}".format(profile.total_cases) }}</div>
+    <div class="stat-subtext">Reports documenting {{ profile.event }}</div>
+  </div>
+
+  <div class="glass-card stat-card">
+    <div class="stat-label">Top Implicated Drug</div>
+    <div class="stat-value" style="font-size:1.4rem; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+      {{ profile.top_drugs[0].drug if profile.top_drugs else "None" }}
+    </div>
+    <div class="stat-subtext">
+      {% if profile.top_drugs %}
+        {{ profile.top_drugs[0].a }} cases &bull; PRR {{ "%.2f"|format(profile.top_drugs[0].prr) if profile.top_drugs[0].prr else "N/A" }}
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+<!-- Demographics Split -->
+<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap:1.75rem; margin-bottom:2.5rem;">
+  <!-- Age Distribution -->
+  <div class="glass-card">
+    <h2 style="font-family:var(--font-display); font-size:1.15rem; color:#fff; margin-bottom:1rem;">Age Group Distribution</h2>
+    <div data-chart="bar-distribution" data-distribution='{{ profile.age_distribution|tojson }}'></div>
+  </div>
+
+  <!-- Sex Distribution -->
+  <div class="glass-card">
+    <h2 style="font-family:var(--font-display); font-size:1.15rem; color:#fff; margin-bottom:1rem;">Patient Sex Distribution</h2>
+    <div data-chart="bar-distribution" data-distribution='{{ profile.sex_distribution|tojson }}'></div>
+  </div>
+</div>
+
+<!-- Top Associated Drugs Table -->
+<section class="glass-card" style="margin-bottom:2.5rem;" id="top-drugs-card">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem;">
+    <div>
+      <h2 style="font-family:var(--font-display); font-size:1.25rem; color:#fff;">Top Disproportionately Implicated Drugs</h2>
+      <p style="font-size:0.85rem; color:var(--text-secondary); margin-top:0.2rem;">
+        Drugs most frequently and disproportionately co-reported with {{ profile.event }}.
+      </p>
+    </div>
+    <a href="/signals?event={{ profile.event }}" class="btn btn-secondary btn-sm">View All &rarr;</a>
+  </div>
+
+  <div class="table-container">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Drug Name</th>
+          <th>Cases (a)</th>
+          <th>PRR</th>
+          <th>ROR</th>
+          <th>&chi;&sup2;</th>
+          <th>Screened</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in profile.top_drugs %}
+        <tr>
+          <td>
+            <a href="/drugs/{{ s.drug }}" style="color:#fff; text-decoration:none; font-weight:600;">
+              {{ s.drug }}
+            </a>
+          </td>
+          <td class="code-cell" style="font-weight:600;">{{ "{:,}".format(s.a) }}</td>
+          <td class="code-cell {% if s.prr_screen %}stat-highlight-emerald{% endif %}" style="font-weight:600;">
+            {{ "%.2f"|format(s.prr) if s.prr else "N/A" }}
+          </td>
+          <td class="code-cell">{{ "%.2f"|format(s.ror) if s.ror else "N/A" }}</td>
+          <td class="code-cell">{{ "%.1f"|format(s.chi_square) if s.chi_square else "N/A" }}</td>
+          <td>
+            {% if s.prr_screen %}
+              <span class="badge badge-screened">SCREENED</span>
+            {% else %}
+              <span class="badge badge-neutral">UNSCREENED</span>
+            {% endif %}
+          </td>
+          <td>
+            <a href="/signals/{{ s.signal_id }}" class="btn btn-secondary btn-sm" style="padding:0.2rem 0.55rem; font-size:0.75rem;">
+              Inspect &rarr;
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Quarterly Event Trend -->
+<section class="glass-card" id="event-trend-card">
+  <h2 style="font-family:var(--font-display); font-size:1.25rem; color:#fff; margin-bottom:0.35rem;">Quarterly Event Volume</h2>
+  <p style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:1rem;">
+    Reports documenting {{ profile.event }} per calendar quarter.
+  </p>
+  <div class="chart-container" data-chart="quarterly-trend" data-points='{{ profile.quarterly_trend|tojson }}'></div>
+</section>
+{% endblock %}

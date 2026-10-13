@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+
+{% block title %}{{ profile.drug }} — Drug Safety Profile{% endblock %}
+{% block meta_description %}FAERS safety profile for {{ profile.drug }}, reporting roles, demographics, top disproportionality signals, and quarterly case volume.{% endblock %}
+
+{% block content %}
+<section class="page-header" id="drug-header">
+  <div>
+    <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
+      <a href="/signals" style="color:var(--text-muted); font-size:0.85rem; text-decoration:none;">&larr; Signal Explorer</a>
+      <span style="color:var(--text-muted);">&bull;</span>
+      <span class="badge badge-neutral">Active Substance Profile</span>
+    </div>
+    <h1 class="page-title">{{ profile.drug }}</h1>
+    <p class="page-description">
+      FAERS Normalized Substance Profile &bull; Associated with <strong>{{ "{:,}".format(profile.total_cases) }}</strong> individual case reports.
+    </p>
+  </div>
+  <div style="display:flex; gap:0.75rem;">
+    <a href="/signals?drug={{ profile.drug }}" class="btn btn-primary btn-sm">
+      Explore All Signals for {{ profile.drug }} &rarr;
+    </a>
+  </div>
+</section>
+
+<!-- Drug KPI Summary -->
+<section class="stats-grid" id="drug-kpis">
+  <div class="glass-card stat-card">
+    <div class="stat-label">Total Reports</div>
+    <div class="stat-value stat-highlight-cyan">{{ "{:,}".format(profile.total_cases) }}</div>
+    <div class="stat-subtext">Reports listing {{ profile.drug }}</div>
+  </div>
+
+  <div class="glass-card stat-card">
+    <div class="stat-label">Screened Signals</div>
+    <div class="stat-value stat-highlight-emerald">{{ "{:,}".format(profile.screened_signals_count) }}</div>
+    <div class="stat-subtext">PRR &ge; 2 &bull; &chi;&sup2; &ge; 4 &bull; a &ge; 3</div>
+  </div>
+
+  <div class="glass-card stat-card">
+    <div class="stat-label">Top Reported Reaction</div>
+    <div class="stat-value" style="font-size:1.4rem; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+      {{ profile.top_signals[0].event if profile.top_signals else "None" }}
+    </div>
+    <div class="stat-subtext">
+      {% if profile.top_signals %}
+        {{ profile.top_signals[0].a }} cases &bull; PRR {{ "%.2f"|format(profile.top_signals[0].prr) if profile.top_signals[0].prr else "N/A" }}
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+<!-- Demographics & Roles Split -->
+<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap:1.75rem; margin-bottom:2.5rem;">
+  <!-- Role Breakdown -->
+  <div class="glass-card">
+    <h2 style="font-family:var(--font-display); font-size:1.15rem; color:#fff; margin-bottom:1rem;">Reporting Roles</h2>
+    <div data-chart="bar-distribution" data-distribution='{{ profile.roles|tojson }}'></div>
+  </div>
+
+  <!-- Age Distribution -->
+  <div class="glass-card">
+    <h2 style="font-family:var(--font-display); font-size:1.15rem; color:#fff; margin-bottom:1rem;">Age Group Distribution</h2>
+    <div data-chart="bar-distribution" data-distribution='{{ profile.age_distribution|tojson }}'></div>
+  </div>
+
+  <!-- Sex Distribution -->
+  <div class="glass-card">
+    <h2 style="font-family:var(--font-display); font-size:1.15rem; color:#fff; margin-bottom:1rem;">Patient Sex Distribution</h2>
+    <div data-chart="bar-distribution" data-distribution='{{ profile.sex_distribution|tojson }}'></div>
+  </div>
+</div>
+
+<!-- Top Signals Table -->
+<section class="glass-card" style="margin-bottom:2.5rem;" id="top-signals-card">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem;">
+    <div>
+      <h2 style="font-family:var(--font-display); font-size:1.25rem; color:#fff;">Top Adverse Event Signals</h2>
+      <p style="font-size:0.85rem; color:var(--text-secondary); margin-top:0.2rem;">
+        Reactions with highest reporting volume and disproportionality.
+      </p>
+    </div>
+    <a href="/signals?drug={{ profile.drug }}" class="btn btn-secondary btn-sm">View All &rarr;</a>
+  </div>
+
+  <div class="table-container">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Adverse Reaction</th>
+          <th>Cases (a)</th>
+          <th>PRR</th>
+          <th>ROR</th>
+          <th>&chi;&sup2;</th>
+          <th>Screened</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in profile.top_signals %}
+        <tr>
+          <td>
+            <a href="/events/{{ s.event }}" style="color:var(--text-accent); text-decoration:none; font-weight:600;">
+              {{ s.event }}
+            </a>
+          </td>
+          <td class="code-cell" style="font-weight:600;">{{ "{:,}".format(s.a) }}</td>
+          <td class="code-cell {% if s.prr_screen %}stat-highlight-emerald{% endif %}" style="font-weight:600;">
+            {{ "%.2f"|format(s.prr) if s.prr else "N/A" }}
+          </td>
+          <td class="code-cell">{{ "%.2f"|format(s.ror) if s.ror else "N/A" }}</td>
+          <td class="code-cell">{{ "%.1f"|format(s.chi_square) if s.chi_square else "N/A" }}</td>
+          <td>
+            {% if s.prr_screen %}
+              <span class="badge badge-screened">SCREENED</span>
+            {% else %}
+              <span class="badge badge-neutral">UNSCREENED</span>
+            {% endif %}
+          </td>
+          <td>
+            <a href="/signals/{{ s.signal_id }}" class="btn btn-secondary btn-sm" style="padding:0.2rem 0.55rem; font-size:0.75rem;">
+              Inspect &rarr;
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Quarterly Reporting Trend -->
+<section class="glass-card" id="drug-trend-card">
+  <h2 style="font-family:var(--font-display); font-size:1.25rem; color:#fff; margin-bottom:0.35rem;">Quarterly Case Volume</h2>
+  <p style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:1rem;">
+    Number of case reports mentioning {{ profile.drug }} per calendar quarter.
+  </p>
+  <div class="chart-container" data-chart="quarterly-trend" data-points='{{ profile.quarterly_trend|tojson }}'></div>
+</section>
+{% endblock %}

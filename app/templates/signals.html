@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+
+{% block title %}Signal Explorer — PharmaSignal Intelligence{% endblock %}
+{% block meta_description %}Explore, filter, and discover FAERS disproportionality signals across all suspect and primary-suspect drugs.{% endblock %}
+
+{% block content %}
+<section class="page-header" id="explorer-header">
+  <div>
+    <h1 class="page-title">Disproportionality Signal Explorer</h1>
+    <p class="page-description">
+      Real-time querying over {{ "{:,}".format(signals.total) }} adverse event disproportionality signals.
+      Screened criteria: <strong>PRR &ge; 2.0, &chi;&sup2; &ge; 4.0, a &ge; 3</strong> (Evans et al.).
+    </p>
+  </div>
+</section>
+
+<!-- Filter Card -->
+<section class="glass-card" style="margin-bottom: 2rem;" id="filter-section">
+  <form method="GET" action="/signals" id="signals-filter-form">
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.25rem;">
+      <!-- Drug Input -->
+      <div>
+        <label for="search-drug-input" style="font-size:0.75rem; font-weight:600; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:0.4rem;">
+          Drug Name
+        </label>
+        <div class="input-group">
+          <input type="text" id="search-drug-input" name="drug" class="input-field" placeholder="e.g. METFORMIN, REPATHA" value="{{ filters.drug or '' }}" autocomplete="off">
+          <div id="drug-autocomplete-list" class="autocomplete-dropdown" style="display:none; position:absolute; top:100%; left:0; right:0; background:var(--bg-secondary); border:1px solid var(--border-glass); border-radius:var(--radius-md); z-index:50; max-height:220px; overflow-y:auto;"></div>
+        </div>
+      </div>
+
+      <!-- Event Input -->
+      <div>
+        <label for="search-event-input" style="font-size:0.75rem; font-weight:600; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:0.4rem;">
+          Adverse Reaction
+        </label>
+        <div class="input-group">
+          <input type="text" id="search-event-input" name="event" class="input-field" placeholder="e.g. NAUSEA, PRURITUS" value="{{ filters.event or '' }}" autocomplete="off">
+          <div id="event-autocomplete-list" class="autocomplete-dropdown" style="display:none; position:absolute; top:100%; left:0; right:0; background:var(--bg-secondary); border:1px solid var(--border-glass); border-radius:var(--radius-md); z-index:50; max-height:220px; overflow-y:auto;"></div>
+        </div>
+      </div>
+
+      <!-- Mode Selector -->
+      <div>
+        <label for="mode-select" style="font-size:0.75rem; font-weight:600; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:0.4rem;">
+          Analysis Mode
+        </label>
+        <select id="mode-select" name="mode" class="input-field">
+          <option value="all" {% if filters.mode == 'all' %}selected{% endif %}>All Suspect Drugs (PS/SS)</option>
+          <option value="primary_suspect" {% if filters.mode == 'primary_suspect' %}selected{% endif %}>Primary Suspect Only (PS/SUS)</option>
+        </select>
+      </div>
+
+      <!-- Screening Filter -->
+      <div>
+        <label for="screened-select" style="font-size:0.75rem; font-weight:600; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:0.4rem;">
+          Screening Threshold
+        </label>
+        <select id="screened-select" name="screened_only" class="input-field">
+          <option value="false" {% if not filters.screened_only %}selected{% endif %}>All Pairs (a &ge; {{ filters.min_cases }})</option>
+          <option value="true" {% if filters.screened_only %}selected{% endif %}>Screened Only (PRR &ge; 2 &amp; &chi;&sup2; &ge; 4)</option>
+        </select>
+      </div>
+
+      <!-- Min Cases -->
+      <div>
+        <label for="min-cases-input" style="font-size:0.75rem; font-weight:600; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:0.4rem;">
+          Min Cases (a)
+        </label>
+        <input type="number" id="min-cases-input" name="min_cases" class="input-field" min="1" max="10000" value="{{ filters.min_cases or 3 }}">
+      </div>
+
+      <!-- Sort By -->
+      <div>
+        <label for="sort-select" style="font-size:0.75rem; font-weight:600; text-transform:uppercase; color:var(--text-muted); display:block; margin-bottom:0.4rem;">
+          Sort By
+        </label>
+        <select id="sort-select" name="sort_by" class="input-field">
+          <option value="a" {% if filters.sort_by == 'a' %}selected{% endif %}>Case Count (a)</option>
+          <option value="prr" {% if filters.sort_by == 'prr' %}selected{% endif %}>PRR Score</option>
+          <option value="ror" {% if filters.sort_by == 'ror' %}selected{% endif %}>ROR Score</option>
+          <option value="chi_square" {% if filters.sort_by == 'chi_square' %}selected{% endif %}>Yates &chi;&sup2;</option>
+          <option value="drug" {% if filters.sort_by == 'drug' %}selected{% endif %}>Drug Name (A-Z)</option>
+          <option value="event" {% if filters.sort_by == 'event' %}selected{% endif %}>Event Name (A-Z)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Quick Focus Drugs Chips -->
+    <div style="display:flex; align-items:center; flex-wrap:wrap; gap:0.5rem; margin-bottom:1.25rem;">
+      <span style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; font-weight:600; margin-right:0.25rem;">Focus Chips:</span>
+      <a href="/signals?drug=METFORMIN" class="chip">METFORMIN</a>
+      <a href="/signals?drug=IBUPROFEN" class="chip">IBUPROFEN</a>
+      <a href="/signals?drug=SERTRALINE" class="chip">SERTRALINE</a>
+      <a href="/signals?drug=ATORVASTATIN" class="chip">ATORVASTATIN</a>
+      <a href="/signals?drug=OMEPRAZOLE" class="chip">OMEPRAZOLE</a>
+      <a href="/signals?drug=MOUNJARO" class="chip">MOUNJARO</a>
+      <a href="/signals?drug=DUPIXENT" class="chip">DUPIXENT</a>
+    </div>
+
+    <!-- Form Actions -->
+    <div style="display:flex; justify-content:flex-end; gap:0.75rem;">
+      <a href="/signals" class="btn btn-secondary btn-sm" id="btn-reset-filters">Reset Filters</a>
+      <button type="submit" class="btn btn-primary btn-sm" id="btn-apply-filters">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+        </svg>
+        Apply Filters
+      </button>
+    </div>
+  </form>
+</section>
+
+<!-- Results Table -->
+<section class="glass-card" id="results-table-card">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:0.5rem;">
+    <div style="font-size:0.9rem; color:var(--text-secondary);">
+      Showing <strong>{{ signals.items|length }}</strong> of <strong>{{ "{:,}".format(signals.total) }}</strong> matching signals
+      (Page {{ signals.page }} of {{ signals.total_pages }})
+    </div>
+    <div style="font-size:0.8rem; font-family:var(--font-mono); color:var(--text-muted);">
+      Mode: <span style="color:var(--cyan-400);">{{ filters.mode }}</span>
+    </div>
+  </div>
+
+  <div class="table-container">
+    <table class="data-table" id="signals-main-table">
+      <thead>
+        <tr>
+          <th>Drug</th>
+          <th>Adverse Event</th>
+          <th>Cases (a)</th>
+          <th>Drug Total (a+b)</th>
+          <th>PRR [95% CI]</th>
+          <th>ROR [95% CI]</th>
+          <th>&chi;&sup2;</th>
+          <th>Screening</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if signals.items %}
+          {% for s in signals.items %}
+          <tr>
+            <td>
+              <a href="/drugs/{{ s.drug }}" style="color:#fff; font-weight:600; text-decoration:none;" class="hover-underline">
+                {{ s.drug }}
+              </a>
+            </td>
+            <td>
+              <a href="/events/{{ s.event }}" style="color:var(--text-accent); text-decoration:none;" class="hover-underline">
+                {{ s.event }}
+              </a>
+            </td>
+            <td class="code-cell" style="font-weight:600;">{{ "{:,}".format(s.a) }}</td>
+            <td class="code-cell" style="color:var(--text-secondary);">{{ "{:,}".format(s.a + s.b) }}</td>
+            <td class="code-cell">
+              {% if s.prr %}
+                <span class="{% if s.prr_screen %}stat-highlight-emerald{% endif %}" style="font-weight:600;">{{ "%.2f"|format(s.prr) }}</span>
+                {% if s.prr_lower and s.prr_upper %}
+                  <span style="font-size:0.72rem; color:var(--text-muted); display:block;">[{{ "%.2f"|format(s.prr_lower) }}, {{ "%.2f"|format(s.prr_upper) }}]</span>
+                {% endif %}
+              {% else %}
+                <span style="color:var(--text-muted);">N/A</span>
+              {% endif %}
+            </td>
+            <td class="code-cell">
+              {% if s.ror %}
+                <span>{{ "%.2f"|format(s.ror) }}</span>
+                {% if s.ror_lower and s.ror_upper %}
+                  <span style="font-size:0.72rem; color:var(--text-muted); display:block;">[{{ "%.2f"|format(s.ror_lower) }}, {{ "%.2f"|format(s.ror_upper) }}]</span>
+                {% endif %}
+              {% else %}
+                <span style="color:var(--text-muted);">N/A</span>
+              {% endif %}
+            </td>
+            <td class="code-cell">
+              {{ "%.1f"|format(s.chi_square) if s.chi_square else "N/A" }}
+            </td>
+            <td>
+              {% if s.prr_screen %}
+                <span class="badge badge-screened" title="PRR &ge; 2, Chi2 &ge; 4, a &ge; 3">PRR PASS</span>
+              {% elif s.ror_screen %}
+                <span class="badge badge-warning" title="ROR lower 95% bound > 1">ROR PASS</span>
+              {% else %}
+                <span class="badge badge-neutral">UNSCREENED</span>
+              {% endif %}
+              {% if s.continuity_corrected %}
+                <span class="badge badge-warning" title="Zero-cell continuity correction applied (+0.5)">CC</span>
+              {% endif %}
+            </td>
+            <td>
+              <a href="/signals/{{ s.signal_id }}" class="btn btn-secondary btn-sm" style="padding:0.25rem 0.65rem; font-size:0.75rem;">
+                Details &rarr;
+              </a>
+            </td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr>
+            <td colspan="9" style="text-align:center; padding:3rem; color:var(--text-muted);">
+              No adverse event signals matched the specified criteria. Try loosening filters or lowering minimum cases.
+            </td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Pagination Controls -->
+  {% if signals.total_pages > 1 %}
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-top:1.5rem; flex-wrap:wrap; gap:1rem;" id="pagination-controls">
+    <div style="font-size:0.85rem; color:var(--text-secondary);">
+      Page {{ signals.page }} of {{ signals.total_pages }}
+    </div>
+    <div style="display:flex; gap:0.5rem;">
+      {% if signals.has_prev %}
+      <a href="/signals?page={{ signals.page - 1 }}&drug={{ filters.drug or '' }}&event={{ filters.event or '' }}&mode={{ filters.mode }}&screened_only={{ filters.screened_only }}&min_cases={{ filters.min_cases }}&sort_by={{ filters.sort_by }}&order={{ filters.order }}" class="btn btn-secondary btn-sm" id="btn-prev-page">
+        &larr; Previous
+      </a>
+      {% endif %}
+      {% if signals.has_next %}
+      <a href="/signals?page={{ signals.page + 1 }}&drug={{ filters.drug or '' }}&event={{ filters.event or '' }}&mode={{ filters.mode }}&screened_only={{ filters.screened_only }}&min_cases={{ filters.min_cases }}&sort_by={{ filters.sort_by }}&order={{ filters.order }}" class="btn btn-secondary btn-sm" id="btn-next-page">
+        Next &rarr;
+      </a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

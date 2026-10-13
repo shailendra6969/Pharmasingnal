@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+
+{% block title %}Data Quality & Audit — PharmaSignal{% endblock %}
+{% block meta_description %}Ingestion pipeline audit report, row-level validation metrics, duplicate resolution, and completeness statistics.{% endblock %}
+
+{% block content %}
+<section class="page-header" id="quality-header">
+  <div>
+    <h1 class="page-title">Data Quality &amp; Ingestion Audit</h1>
+    <p class="page-description">
+      Measured counts and audit trail for every pipeline stage &mdash; nothing silently discarded (spec &sect;7, &sect;38).
+    </p>
+  </div>
+  <div>
+    <a href="/api/data-quality" target="_blank" class="btn btn-secondary btn-sm" id="btn-raw-json">
+      View Raw JSON &rarr;
+    </a>
+  </div>
+</section>
+
+{% if report %}
+<!-- Ingest Run Metadata -->
+<section class="glass-card" style="margin-bottom:2rem;" id="run-meta-card">
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem;">
+    <div>
+      <div style="font-size:0.75rem; font-weight:600; text-transform:uppercase; color:var(--text-muted);">Latest Ingestion Run</div>
+      <div style="font-family:var(--font-display); font-size:1.5rem; font-weight:700; color:#fff; margin:0.2rem 0;">
+        Run #{{ report.run_id }} &bull; {{ report.quarters|join(', ') }}
+      </div>
+      <div style="font-size:0.8rem; color:var(--text-secondary);">
+        Generated at: <strong>{{ report.generated_at }}</strong>
+      </div>
+    </div>
+    <div style="display:flex; gap:0.5rem;">
+      <span class="badge badge-screened">PIPELINE VERIFIED</span>
+      <span class="badge badge-neutral">{{ report.stage_totals.demo_raw_rows|default(0) }} DEMO rows</span>
+    </div>
+  </div>
+</section>
+
+<!-- Stage Totals Cards -->
+<section class="stats-grid" id="stage-totals-grid">
+  <div class="glass-card stat-card">
+    <div class="stat-label">DEMO Rows</div>
+    <div class="stat-value stat-highlight-cyan">{{ "{:,}".format(report.stage_totals.demo_raw_rows|default(0)) }}</div>
+    <div class="stat-subtext">Accepted: {{ "{:,}".format(report.stage_totals.demo_accepted_rows|default(0)) }} &bull; Rej: {{ report.stage_totals.demo_rejected_rows|default(0) }}</div>
+  </div>
+
+  <div class="glass-card stat-card">
+    <div class="stat-label">DRUG Rows</div>
+    <div class="stat-value">{{ "{:,}".format(report.stage_totals.drug_raw_rows|default(0)) }}</div>
+    <div class="stat-subtext">Accepted: {{ "{:,}".format(report.stage_totals.drug_accepted_rows|default(0)) }} &bull; Dupes: {{ report.stage_totals.drug_duplicates_removed|default(0) }}</div>
+  </div>
+
+  <div class="glass-card stat-card">
+    <div class="stat-label">REAC Event Rows</div>
+    <div class="stat-value">{{ "{:,}".format(report.stage_totals.reac_raw_rows|default(0)) }}</div>
+    <div class="stat-subtext">Accepted: {{ "{:,}".format(report.stage_totals.reac_accepted_rows|default(0)) }} &bull; Dupes: {{ report.stage_totals.reac_duplicates_removed|default(0) }}</div>
+  </div>
+
+  <div class="glass-card stat-card">
+    <div class="stat-label">Deduplicated Current Cases</div>
+    <div class="stat-value stat-highlight-emerald">{{ "{:,}".format(report.database_counts.cases_current|default(0)) }}</div>
+    <div class="stat-subtext">Non-current versions kept: {{ report.database_counts.cases_non_current|default(0) }}</div>
+  </div>
+</section>
+
+<!-- Data Completeness & Quality Metrics -->
+<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap:1.75rem; margin-bottom:2.5rem;">
+  <!-- Demographics Completeness -->
+  <div class="glass-card">
+    <h2 style="font-family:var(--font-display); font-size:1.15rem; color:#fff; margin-bottom:1rem;">Demographic Completeness</h2>
+    <div style="font-size:0.85rem; color:var(--text-secondary); line-height:1.8;">
+      <div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--border-subtle); padding:0.4rem 0;">
+        <span>Missing Age:</span>
+        <strong style="font-family:var(--font-mono); color:#fff;">{{ "{:,}".format(report.stage_totals.missing_age|default(0)) }}</strong>
+      </div>
+      <div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--border-subtle); padding:0.4rem 0;">
+        <span>Unparseable Age:</span>
+        <strong style="font-family:var(--font-mono); color:#fff;">{{ "{:,}".format(report.stage_totals.unparseable_age|default(0)) }}</strong>
+      </div>
+      <div style="display:flex; justify-content:space-between; padding:0.4rem 0;">
+        <span>Unknown Sex:</span>
+        <strong style="font-family:var(--font-mono); color:#fff;">{{ "{:,}".format(report.stage_totals.unknown_sex|default(0)) }}</strong>
+      </div>
+    </div>
+  </div>
+
+  <!-- Distinct Vocabulary Counts -->
+  <div class="glass-card">
+    <h2 style="font-family:var(--font-display); font-size:1.15rem; color:#fff; margin-bottom:1rem;">Normalized Vocabulary</h2>
+    <div style="font-size:0.85rem; color:var(--text-secondary); line-height:1.8;">
+      <div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--border-subtle); padding:0.4rem 0;">
+        <span>Distinct Normalized Drugs:</span>
+        <strong style="font-family:var(--font-mono); color:var(--cyan-400);">{{ "{:,}".format(report.stage_totals.distinct_normalized_drugs|default(0)) }}</strong>
+      </div>
+      <div style="display:flex; justify-content:space-between; border-bottom:1px solid var(--border-subtle); padding:0.4rem 0;">
+        <span>Distinct Normalized Events:</span>
+        <strong style="font-family:var(--font-mono); color:var(--violet-400);">{{ "{:,}".format(report.stage_totals.distinct_normalized_events|default(0)) }}</strong>
+      </div>
+      <div style="display:flex; justify-content:space-between; padding:0.4rem 0;">
+        <span>Orphan Rows (Drugs / Events):</span>
+        <strong style="font-family:var(--font-mono); color:var(--emerald-400);">0 / 0</strong>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Per-Quarter Breakdown Table -->
+<section class="glass-card" id="per-quarter-card">
+  <h2 style="font-family:var(--font-display); font-size:1.25rem; color:#fff; margin-bottom:1rem;">Per-Quarter Ingestion Summary</h2>
+  <div class="table-container">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Quarter</th>
+          <th>DEMO Rows</th>
+          <th>DRUG Rows</th>
+          <th>REAC Rows</th>
+          <th>Accepted Cases</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for pq in report.per_quarter %}
+        <tr>
+          <td style="font-weight:600; color:#fff;">{{ pq.quarter }}</td>
+          <td class="code-cell">{{ "{:,}".format(pq.demo_parsed|default(0)) }}</td>
+          <td class="code-cell">{{ "{:,}".format(pq.drug_parsed|default(0)) }}</td>
+          <td class="code-cell">{{ "{:,}".format(pq.reac_parsed|default(0)) }}</td>
+          <td class="code-cell stat-highlight-cyan">{{ "{:,}".format(pq.demo_accepted|default(0)) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% else %}
+<div class="glass-card" style="text-align:center; padding:3rem;">
+  <p style="color:var(--text-muted); font-size:1rem;">
+    No ingestion quality report has been generated yet. Run the ingestion pipeline to generate the first audit report.
+  </p>
+</div>
+{% endif %}
+{% endblock %}

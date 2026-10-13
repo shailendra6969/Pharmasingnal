@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}PharmaSignal — Evidence-Verified Adverse Event Intelligence{% endblock %}</title>
+  <meta name="description" content="{% block meta_description %}PharmaSignal is an evidence-verified adverse-event signal intelligence platform built on public FAERS data and FDA documentation.{% endblock %}">
+  <link rel="stylesheet" href="/static/css/index.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2306b6d4'><circle cx='12' cy='12' r='10'/></svg>">
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+  <!-- Header -->
+  <header class="app-header" id="main-header">
+    <a href="/dashboard" class="brand-wrapper" id="brand-link" title="PharmaSignal Dashboard">
+      <div class="brand-logo-icon">
+        <svg viewBox="0 0 24 24">
+          <path d="M10.5 20.5l10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7z"></path>
+          <path d="M8.5 8.5l7 7"></path>
+        </svg>
+      </div>
+      <span class="brand-text-name">PharmaSignal</span>
+      <span class="brand-badge">FAERS</span>
+    </a>
+
+    <nav class="main-nav" id="main-navigation" aria-label="Main Navigation">
+      <a href="/dashboard" class="nav-link {% if active_nav == 'dashboard' %}active{% endif %}" id="nav-dashboard">
+        Dashboard
+      </a>
+      <a href="/signals" class="nav-link {% if active_nav == 'signals' %}active{% endif %}" id="nav-signals">
+        Signal Explorer
+      </a>
+      <a href="/data-quality" class="nav-link {% if active_nav == 'quality' %}active{% endif %}" id="nav-quality">
+        Data Quality
+      </a>
+      <a href="/api/health" target="_blank" class="nav-link" id="nav-api">
+        API
+      </a>
+    </nav>
+
+    <div class="header-status">
+      <div class="status-indicator" title="Connected to PostgreSQL Ingestion Database">
+        <span class="pulse-dot"></span>
+        <span>Online</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Scientific Guardrails Banner -->
+  <div class="scientific-banner" id="scientific-disclaimer-banner">
+    <span class="banner-tag">SCIENTIFIC NOTICE</span>
+    <span>Decision-support prototype on public voluntary FAERS data. Signal detection indicates statistical disproportion, <strong>not proof of causation</strong>, incidence rates, or clinical risk probability.</span>
+  </div>
+
+  <!-- Page Content -->
+  <main class="main-container" id="main-content">
+    {% block content %}{% endblock %}
+  </main>
+
+  <!-- Footer -->
+  <footer class="app-footer" id="main-footer">
+    <div>
+      <strong>PharmaSignal</strong> &mdash; Multi-Quarter FAERS Disproportionality & Signal Intelligence
+    </div>
+    <div style="font-family: var(--font-mono);">
+      Full Background N &bull; Evans PRR &bull; Woolf ROR 95% CIs &bull; Primary-Suspect Sensitivity
+    </div>
+  </footer>
+
+  <script src="/static/js/app.js"></script>
+  {% block scripts_extra %}{% endblock %}
+</body>
+</html>

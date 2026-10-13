@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard — PharmaSignal Evidence Intelligence{% endblock %}
+{% block meta_description %}Overview of multi-quarter FAERS adverse-event surveillance, full-background screening signals, and focus drug monitoring.{% endblock %}
+
+{% block content %}
+<section class="page-header" id="dashboard-header">
+  <div>
+    <h1 class="page-title">Pharmacovigilance Intelligence Dashboard</h1>
+    <p class="page-description">
+      Full-background disproportionality surveillance across {{ stats.cases_count|number_format }} deduplicated FAERS reports.
+      Quarters monitored: <strong>{{ stats.quarters|join(', ') }}</strong>.
+    </p>
+  </div>
+  <div style="display:flex; gap:0.75rem;">
+    <a href="/signals" class="btn btn-primary" id="btn-explore-signals">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"></circle>
+        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+      </svg>
+      Open Signal Explorer
+    </a>
+  </div>
+</section>
+
+<!-- KPI Stats Grid -->
+<section class="stats-grid" id="dashboard-kpis">
+  <div class="glass-card stat-card">
+    <div class="stat-label">
+      <span>Deduplicated Cases</span>
+      <span class="badge badge-neutral">FAERS</span>
+    </div>
+    <div class="stat-value stat-highlight-cyan">{{ "{:,}".format(stats.cases_count) }}</div>
+    <div class="stat-subtext">Current reports across all quarters</div>
+  </div>
+
+  <div class="glass-card stat-card">
+    <div class="stat-label">
+      <span>Drug-Event Pairs Evaluated</span>
+      <span class="badge badge-neutral">Background</span>
+    </div>
+    <div class="stat-value">{{ "{:,}".format(stats.total_pairs) }}</div>
+    <div class="stat-subtext">{{ "{:,}".format(stats.distinct_drugs) }} drugs &bull; {{ "{:,}".format(stats.distinct_events) }} events</div>
+  </div>
+
+  <div class="glass-card stat-card">
+    <div class="stat-label">
+      <span>PRR-Screened Signals</span>
+      <span class="badge badge-screened">PRR &ge; 2</span>
+    </div>
+    <div class="stat-value stat-highlight-emerald">{{ "{:,}".format(stats.screened_prr_count) }}</div>
+    <div class="stat-subtext">PRR &ge; 2.0 &bull; &chi;&sup2; &ge; 4.0 &bull; a &ge; 3</div>
+  </div>
+
+  <div class="glass-card stat-card">
+    <div class="stat-label">
+      <span>Primary Suspect Mode</span>
+      <span class="badge badge-primary-suspect">PS Only</span>
+    </div>
+    <div class="stat-value stat-highlight-violet">{{ "{:,}".format(stats.primary_suspect_screened) }}</div>
+    <div class="stat-subtext">Sensitivity test: PS/SUS role only</div>
+  </div>
+</section>
+
+<!-- Focus Drugs Surveillance Section -->
+<section style="margin-bottom: 2.5rem;" id="focus-drugs-section">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+    <div>
+      <h2 style="font-family:var(--font-display); font-size:1.35rem; color:#fff;">Focus Drug Surveillance</h2>
+      <p style="font-size:0.85rem; color:var(--text-secondary); margin-top:0.2rem;">
+        Analytical focus panel (evaluated against full background N &mdash; never the statistical background).
+      </p>
+    </div>
+  </div>
+
+  <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:1.25rem;">
+    {% for fd in stats.focus_drugs %}
+    <div class="glass-card glass-card-interactive stat-card" style="cursor:pointer;" onclick="location.href='/drugs/{{ fd.drug }}'">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.75rem;">
+        <span style="font-family:var(--font-display); font-size:1.15rem; font-weight:700; color:#fff;">{{ fd.drug }}</span>
+        <span class="badge badge-neutral">{{ fd.screened_pairs }} signals</span>
+      </div>
+      <div style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:0.75rem;">
+        Total pairs analyzed: <strong>{{ fd.total_pairs }}</strong><br>
+        Peak case concentration: <strong>{{ fd.max_cases }}</strong> cases
+      </div>
+      {% if fd.top_signal %}
+      <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:0.5rem 0.75rem; margin-top:auto;">
+        <div style="font-size:0.7rem; color:var(--text-muted); text-transform:uppercase;">Top Screened Reaction</div>
+        <div style="font-size:0.85rem; font-weight:600; color:var(--cyan-400); margin:0.15rem 0;">{{ fd.top_signal.event }}</div>
+        <div style="font-size:0.75rem; font-family:var(--font-mono); color:var(--text-secondary);">
+          PRR: {{ "%.2f"|format(fd.top_signal.prr) }} &bull; a={{ fd.top_signal.a }}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<!-- Prominent Disproportionality Signals Table -->
+<section class="glass-card" style="margin-bottom: 2.5rem;" id="prominent-signals-section">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.25rem; flex-wrap:wrap; gap:1rem;">
+    <div>
+      <h2 style="font-family:var(--font-display); font-size:1.35rem; color:#fff;">Prominent Adverse Event Signals</h2>
+      <p style="font-size:0.85rem; color:var(--text-secondary); margin-top:0.2rem;">
+        High-volume, highly disproportional drug-event pairs meeting screening criteria.
+      </p>
+    </div>
+    <a href="/signals?screened_only=true" class="btn btn-secondary btn-sm" id="btn-view-all-screened">
+      View All Screened Signals &rarr;
+    </a>
+  </div>
+
+  <div class="table-container">
+    <table class="data-table" id="prominent-signals-table">
+      <thead>
+        <tr>
+          <th>Drug</th>
+          <th>Adverse Event</th>
+          <th>Cases (a)</th>
+          <th>PRR</th>
+          <th>ROR</th>
+          <th>Yates &chi;&sup2;</th>
+          <th>Status</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in stats.prominent_signals %}
+        <tr>
+          <td>
+            <a href="/drugs/{{ s.drug }}" style="color:#fff; font-weight:600; text-decoration:none;" class="hover-underline">
+              {{ s.drug }}
+            </a>
+          </td>
+          <td>
+            <a href="/events/{{ s.event }}" style="color:var(--text-accent); text-decoration:none;" class="hover-underline">
+              {{ s.event }}
+            </a>
+          </td>
+          <td class="code-cell" style="font-weight:600;">{{ "{:,}".format(s.a) }}</td>
+          <td class="code-cell stat-highlight-emerald" style="font-weight:600;">
+            {{ "%.2f"|format(s.prr) if s.prr else "N/A" }}
+          </td>
+          <td class="code-cell">
+            {{ "%.2f"|format(s.ror) if s.ror else "N/A" }}
+          </td>
+          <td class="code-cell">
+            {{ "%.1f"|format(s.chi_square) if s.chi_square else "N/A" }}
+          </td>
+          <td>
+            <span class="badge badge-screened">SCREENED</span>
+          </td>
+          <td>
+            <a href="/signals/{{ s.signal_id }}" class="btn btn-secondary btn-sm" style="padding:0.2rem 0.6rem; font-size:0.75rem;">
+              Inspect 2&times;2
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

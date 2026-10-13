@@ -1,0 +1,7 @@
+# PharmaSignal — Phase 1 pinned dependencies (see docs/plans/03-dependency-plan.md)
+pandas==2.2.3
+psycopg2-binary==2.9.10
+python-dotenv==1.0.1
+requests==2.32.3
+pytest==8.3.4
+flask==3.1.0

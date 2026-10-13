@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+
+{% block title %}{{ signal.drug }} / {{ signal.event }} — Signal Detail{% endblock %}
+{% block meta_description %}Statistical disproportionality 2x2 analysis, PRR, ROR confidence intervals, and sensitivity testing for {{ signal.drug }} and {{ signal.event }}.{% endblock %}
+
+{% block content %}
+<section class="page-header" id="signal-detail-header">
+  <div>
+    <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
+      <a href="/signals" style="color:var(--text-muted); font-size:0.85rem; text-decoration:none;">&larr; Signal Explorer</a>
+      <span style="color:var(--text-muted);">&bull;</span>
+      <span class="badge {% if signal.primary_suspect_mode %}badge-primary-suspect{% else %}badge-neutral{% endif %}">
+        {% if signal.primary_suspect_mode %}Primary Suspect Mode{% else %}All Suspect Drugs{% endif %}
+      </span>
+      {% if signal.prr_screen %}
+        <span class="badge badge-screened">PRR SCREENED</span>
+      {% endif %}
+    </div>
+    <h1 class="page-title" style="display:flex; align-items:baseline; gap:0.75rem; flex-wrap:wrap;">
+      <a href="/drugs/{{ signal.drug }}" style="color:#fff; text-decoration:none;" class="hover-underline">{{ signal.drug }}</a>
+      <span style="color:var(--cyan-400); font-weight:300;">/</span>
+      <a href="/events/{{ signal.event }}" style="color:var(--text-accent); text-decoration:none;" class="hover-underline">{{ signal.event }}</a>
+    </h1>
+    <p class="page-description">
+      FAERS Disproportionality Signal ID: <code>#{{ signal.signal_id }}</code> &bull; Analyzed Period: <strong>{{ signal.period }}</strong>
+    </p>
+  </div>
+  <div style="display:flex; gap:0.5rem;">
+    <a href="/drugs/{{ signal.drug }}" class="btn btn-secondary btn-sm">View Drug Profile</a>
+    <a href="/events/{{ signal.event }}" class="btn btn-secondary btn-sm">View Event Profile</a>
+  </div>
+</section>
+
+<!-- 2x2 Contingency Table & Key Metrics Split -->
+<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap:1.75rem; margin-bottom:2.5rem;">
+  <!-- 2x2 Table Visualizer -->
+  <div class="glass-card">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+      <h2 style="font-family:var(--font-display); font-size:1.25rem; color:#fff;">2&times;2 Contingency Matrix</h2>
+      <span class="badge badge-neutral">Full Background N={{ "{:,}".format(signal.background_n or (signal.a + signal.b + signal.c + signal.d)) }}</span>
+    </div>
+
+    <div class="contingency-grid">
+      <!-- Headers -->
+      <div class="c-cell c-cell-header">Report Type</div>
+      <div class="c-cell c-cell-header" style="text-align:center;">Reaction (Yes)</div>
+      <div class="c-cell c-cell-header" style="text-align:center;">Reaction (No)</div>
+      <div class="c-cell c-cell-header" style="text-align:right;">Total</div>
+
+      <!-- Drug Row -->
+      <div class="c-cell">
+        <strong style="color:var(--cyan-400); font-size:0.85rem;">{{ signal.drug }}</strong>
+        <span style="font-size:0.7rem; color:var(--text-muted);">Index Drug</span>
+      </div>
+      <div class="c-cell c-cell-data c-cell-target">
+        <span class="c-cell-label">Cell a (Target)</span>
+        <span class="c-cell-num">{{ "{:,}".format(signal.a) }}</span>
+      </div>
+      <div class="c-cell c-cell-data">
+        <span class="c-cell-label">Cell b</span>
+        <span class="c-cell-num">{{ "{:,}".format(signal.b) }}</span>
+      </div>
+      <div class="c-cell" style="text-align:right;">
+        <span style="font-family:var(--font-mono); font-size:0.95rem; font-weight:600; color:#fff;">{{ "{:,}".format(signal.a + signal.b) }}</span>
+      </div>
+
+      <!-- Other Drugs Row -->
+      <div class="c-cell">
+        <strong style="color:var(--text-secondary); font-size:0.85rem;">Other Drugs</strong>
+        <span style="font-size:0.7rem; color:var(--text-muted);">Background</span>
+      </div>
+      <div class="c-cell c-cell-data">
+        <span class="c-cell-label">Cell c</span>
+        <span class="c-cell-num">{{ "{:,}".format(signal.c) }}</span>
+      </div>
+      <div class="c-cell c-cell-data">
+        <span class="c-cell-label">Cell d</span>
+        <span class="c-cell-num">{{ "{:,}".format(signal.d) }}</span>
+      </div>
+      <div class="c-cell" style="text-align:right;">
+        <span style="font-family:var(--font-mono); font-size:0.95rem; font-weight:600; color:#fff;">{{ "{:,}".format(signal.c + signal.d) }}</span>
+      </div>
+
+      <!-- Totals Row -->
+      <div class="c-cell c-cell-header">Total</div>
+      <div class="c-cell" style="text-align:center;">
+        <span style="font-family:var(--font-mono); font-size:0.95rem; font-weight:600; color:#fff;">{{ "{:,}".format(signal.a + signal.c) }}</span>
+      </div>
+      <div class="c-cell" style="text-align:center;">
+        <span style="font-family:var(--font-mono); font-size:0.95rem; font-weight:600; color:#fff;">{{ "{:,}".format(signal.b + signal.d) }}</span>
+      </div>
+      <div class="c-cell" style="text-align:right;">
+        <span style="font-family:var(--font-mono); font-size:1.1rem; font-weight:700; color:var(--cyan-400);">{{ "{:,}".format(signal.a + signal.b + signal.c + signal.d) }}</span>
+      </div>
+    </div>
+
+    {% if signal.continuity_corrected %}
+    <div style="font-size:0.75rem; color:var(--amber-500); background:rgba(245,158,11,0.08); padding:0.5rem 0.75rem; border-radius:var(--radius-sm); border:1px solid rgba(245,158,11,0.25);">
+      &bull; Haldane&ndash;Anscombe continuity correction (+0.5) applied because of zero frequency in log calculations.
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Disproportionality Metrics Summary -->
+  <div class="glass-card">
+    <h2 style="font-family:var(--font-display); font-size:1.25rem; color:#fff; margin-bottom:1.25rem;">Disproportionality Point &amp; Intervals</h2>
+
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:1rem; margin-bottom:1.25rem;">
+      <!-- PRR -->
+      <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border-subtle); border-radius:var(--radius-md); padding:1rem;">
+        <div style="font-size:0.75rem; font-weight:600; text-transform:uppercase; color:var(--text-muted);">PRR (Evans et al.)</div>
+        <div style="font-family:var(--font-display); font-size:2.2rem; font-weight:700; color:var(--emerald-400); margin:0.25rem 0;">
+          {{ "%.2f"|format(signal.prr) if signal.prr else "N/A" }}
+        </div>
+        <div style="font-size:0.8rem; font-family:var(--font-mono); color:var(--text-secondary);">
+          95% CI: [{{ "%.2f"|format(signal.prr_lower) if signal.prr_lower else "N/A" }}, {{ "%.2f"|format(signal.prr_upper) if signal.prr_upper else "N/A" }}]
+        </div>
+        <div style="margin-top:0.5rem;">
+          {% if signal.prr_screen %}
+            <span class="badge badge-screened">Passes Evans Screen (&ge; 2)</span>
+          {% else %}
+            <span class="badge badge-neutral">Below Threshold (&lt; 2)</span>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- ROR -->
+      <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border-subtle); border-radius:var(--radius-md); padding:1rem;">
+        <div style="font-size:0.75rem; font-weight:600; text-transform:uppercase; color:var(--text-muted);">ROR (Woolf Method)</div>
+        <div style="font-family:var(--font-display); font-size:2.2rem; font-weight:700; color:#fff; margin:0.25rem 0;">
+          {{ "%.2f"|format(signal.ror) if signal.ror else "N/A" }}
+        </div>
+        <div style="font-size:0.8rem; font-family:var(--font-mono); color:var(--text-secondary);">
+          95% CI: [{{ "%.2f"|format(signal.ror_lower) if signal.ror_lower else "N/A" }}, {{ "%.2f"|format(signal.ror_upper) if signal.ror_upper else "N/A" }}]
+        </div>
+        <div style="margin-top:0.5rem;">
+          {% if signal.ror_screen %}
+            <span class="badge badge-screened">Lower 95% Bound &gt; 1</span>
+          {% else %}
+            <span class="badge badge-neutral">Lower Bound &le; 1</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Chi Square -->
+    <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border-subtle); border-radius:var(--radius-md); padding:0.85rem 1rem;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <div style="font-size:0.75rem; font-weight:600; text-transform:uppercase; color:var(--text-muted);">Yates' Corrected &chi;&sup2;</div>
+          <div style="font-family:var(--font-mono); font-size:1.35rem; font-weight:700; color:#fff; margin-top:0.2rem;">
+            {{ "%.2f"|format(signal.chi_square) if signal.chi_square else "N/A" }}
+          </div>
+        </div>
+        <div>
+          {% if signal.chi_square and signal.chi_square >= 4.0 %}
+            <span class="badge badge-screened">&chi;&sup2; &ge; 4.0 (Significant)</span>
+          {% else %}
+            <span class="badge badge-neutral">&chi;&sup2; &lt; 4.0</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Primary Suspect Sensitivity Comparison -->
+<section class="glass-card" style="margin-bottom:2.5rem;" id="sensitivity-section">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:0.5rem;">
+    <div>
+      <h2 style="font-family:var(--font-display); font-size:1.25rem; color:#fff;">Sensitivity Analysis: Suspect Role Exposure</h2>
+      <p style="font-size:0.85rem; color:var(--text-secondary); margin-top:0.2rem;">
+        Testing signal robustness when secondary suspect and concomitant drugs are removed.
+      </p>
+    </div>
+  </div>
+
+  <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:1.25rem;">
+    <!-- Active Mode -->
+    <div style="background:rgba(6,182,212,0.05); border:1px solid rgba(6,182,212,0.3); border-radius:var(--radius-md); padding:1.25rem;">
+      <div style="font-size:0.75rem; font-weight:600; color:var(--cyan-400); text-transform:uppercase; margin-bottom:0.4rem;">
+        Current View: {% if signal.primary_suspect_mode %}Primary Suspect Only{% else %}All Suspect Drugs{% endif %}
+      </div>
+      <div style="font-size:1.1rem; font-weight:600; color:#fff; margin-bottom:0.5rem;">
+        Co-occurrence Cases: <span style="font-family:var(--font-mono); color:var(--cyan-400);">{{ "{:,}".format(signal.a) }}</span>
+      </div>
+      <div style="font-size:0.85rem; color:var(--text-secondary);">
+        PRR: <strong>{{ "%.2f"|format(signal.prr) if signal.prr else "N/A" }}</strong> &bull;
+        ROR: <strong>{{ "%.2f"|format(signal.ror) if signal.ror else "N/A" }}</strong> &bull;
+        &chi;&sup2;: <strong>{{ "%.1f"|format(signal.chi_square) if signal.chi_square else "N/A" }}</strong>
+      </div>
+    </div>
+
+    <!-- Counterpart Mode -->
+    {% if signal.sensitivity_counterpart %}
+    <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border-subtle); border-radius:var(--radius-md); padding:1.25rem;">
+      <div style="font-size:0.75rem; font-weight:600; color:var(--violet-400); text-transform:uppercase; margin-bottom:0.4rem;">
+        Comparison: {% if signal.sensitivity_counterpart.primary_suspect_mode %}Primary Suspect Only{% else %}All Suspect Drugs{% endif %}
+      </div>
+      <div style="font-size:1.1rem; font-weight:600; color:#fff; margin-bottom:0.5rem;">
+        Co-occurrence Cases: <span style="font-family:var(--font-mono); color:var(--violet-400);">{{ "{:,}".format(signal.sensitivity_counterpart.a) }}</span>
+      </div>
+      <div style="font-size:0.85rem; color:var(--text-secondary);">
+        PRR: <strong>{{ "%.2f"|format(signal.sensitivity_counterpart.prr) if signal.sensitivity_counterpart.prr else "N/A" }}</strong> &bull;
+        ROR: <strong>{{ "%.2f"|format(signal.sensitivity_counterpart.ror) if signal.sensitivity_counterpart.ror else "N/A" }}</strong> &bull;
+        &chi;&sup2;: <strong>{{ "%.1f"|format(signal.sensitivity_counterpart.chi_square) if signal.sensitivity_counterpart.chi_square else "N/A" }}</strong>
+      </div>
+      <div style="margin-top:0.75rem;">
+        <a href="/signals/{{ signal.sensitivity_counterpart.signal_id }}" class="btn btn-secondary btn-sm" style="font-size:0.75rem;">
+          Switch to this mode &rarr;
+        </a>
+      </div>
+    </div>
+    {% else %}
+    <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border-subtle); border-radius:var(--radius-md); padding:1.25rem; display:flex; align-items:center; justify-content:center; color:var(--text-muted); font-size:0.85rem;">
+      No primary suspect counterpart met the case floor (a &ge; 3).
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<!-- Quarterly Trend Section -->
+<section class="glass-card" style="margin-bottom:2.5rem;" id="quarterly-trend-section">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:0.5rem;">
+    <div>
+      <h2 style="font-family:var(--font-display); font-size:1.25rem; color:#fff;">Quarterly Co-occurrence Trajectory</h2>
+      <p style="font-size:0.85rem; color:var(--text-secondary); margin-top:0.2rem;">
+        Volume history across monitored quarters (reporting volume is evaluated separately from disproportionality).
+      </p>
+    </div>
+  </div>
+
+  <div class="chart-container" data-chart="quarterly-trend" data-points='{{ signal.quarterly_history|tojson }}'>
+    <!-- Rendered via SVG in app.js -->
+  </div>
+</section>
+{% endblock %}
