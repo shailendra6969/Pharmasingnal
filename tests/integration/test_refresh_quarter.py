@@ -83,8 +83,10 @@ def test_refresh_quarter_end_to_end(test_db_url, tmp_path, project_root,
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["status"] == "succeeded"
     assert report["quarter"] == "2024q1"
-    assert set(report["stages"]) == {"download", "ingest", "signals",
-                                     "concordance", "regimes"}
+    assert set(report["stages"]) == {
+        "download", "ingest", "signals", "concordance", "regimes",
+        "profiles", "confounding",
+    }
     assert report["stages"]["concordance"]["status"] == "skipped"
     assert report["stages"]["download"]["archive_sha256"] == "0" * 64
 
@@ -102,6 +104,20 @@ def test_refresh_quarter_end_to_end(test_db_url, tmp_path, project_root,
             assert f["drug"] and f["event"] and f["quarter"]
             assert f["flag"] in reg["flag_counts"]
             assert f["reason"]
+
+    # ---- profile verdicts stage ----
+    prof = report["stages"]["profiles"]
+    assert prof["status"] == "succeeded"
+    assert isinstance(prof["signals_evaluated"], int)
+    assert isinstance(prof["flagged"], list)
+    assert isinstance(prof["verdict_counts"], dict)
+
+    # ---- confounding probe stage ----
+    conf = report["stages"]["confounding"]
+    assert conf["status"] == "succeeded"
+    assert isinstance(conf["summary"], dict)
+    assert "probed" in conf["summary"]
+    assert isinstance(conf["flagged"], list)
 
     # ---- ingest stage: data landed + dedup invariant held ----
     ing = report["stages"]["ingest"]
@@ -174,6 +190,63 @@ def test_refresh_quarter_skip_download_missing_dir_fails(test_db_url, tmp_path):
                        "--report", str(tmp_path / "r.json")])
     assert rc == 1
     assert not (tmp_path / "r.json").exists()
+
+
+def test_refresh_quarter_quarter_dir_records_skipped_download(
+        test_db_url, tmp_path, project_root):
+    """--quarter-dir with an existing directory records the download stage
+    as skipped instead of crashing with KeyError 'download' (regression:
+    the report dict was only populated by the download branch)."""
+    import scripts.refresh_quarter as refresh
+
+    raw_root = _raw_root_with_fixtures(test_db_url, tmp_path, project_root)
+    fixture = project_root / "data" / "samples" / "fixture_2024q1"
+    report_path = tmp_path / "refresh.json"
+    rc = refresh.main([
+        "--quarter", "2024q1", "--min-cases", "1",
+        "--quarter-dir", str(fixture),
+        "--skip-concordance",           # covered by its own tests
+        "--database-url", test_db_url,
+        "--raw-root", str(raw_root),
+        "--report", str(report_path),
+    ])
+    assert rc == 0
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "succeeded"
+    dl = report["stages"]["download"]
+    assert dl["status"] == "skipped"
+    assert dl["reason"] == "--quarter-dir given"
+    assert dl["extract_dir"] == str(fixture)
+    assert dl["files"]                  # fixture dir was validated, not ignored
+    # the data still landed through the quarter-dir ingest path
+    assert _q(test_db_url,
+              "SELECT count(*) FROM cases WHERE source_quarter = '2024q1'") > 0
+
+
+def test_refresh_quarter_skip_download_records_stage(test_db_url, tmp_path,
+                                                     project_root):
+    """--skip-download on an existing directory also records a skipped
+    download stage (same KeyError class as --quarter-dir)."""
+    import scripts.refresh_quarter as refresh
+
+    raw_root = _raw_root_with_fixtures(test_db_url, tmp_path, project_root)
+    report_path = tmp_path / "refresh.json"
+    rc = refresh.main([
+        "--quarter", "2024q2", "--min-cases", "1",
+        "--skip-download",
+        "--skip-concordance",
+        "--database-url", test_db_url,
+        "--raw-root", str(raw_root),
+        "--report", str(report_path),
+    ])
+    assert rc == 0
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    dl = report["stages"]["download"]
+    assert dl["status"] == "skipped"
+    assert dl["reason"] == "--skip-download"
+    assert dl["extract_dir"] == str(raw_root / "2024q2")
+    assert _q(test_db_url,
+              "SELECT count(*) FROM cases WHERE source_quarter = '2024q2'") > 0
 
 
 def _reference_dir(tmp_path: Path) -> Path:
@@ -278,3 +351,49 @@ def test_refresh_quarter_missing_reference_skips_concordance(
         ["stages"]["concordance"]
     assert st["status"] == "skipped"
     assert "missing" in st["reason"] or "Reference files missing" in st["reason"]
+
+
+def test_refresh_quarter_skip_flags(test_db_url, tmp_path, project_root, monkeypatch):
+    """--skip-regimes, --skip-profiles, --skip-confounding record skipped status."""
+    from app.faers.download import DownloadResult
+    import scripts.refresh_quarter as refresh
+
+    raw_root = _raw_root_with_fixtures(test_db_url, tmp_path, project_root)
+
+    def fake_download(quarter, raw_root_, **kwargs):
+        return DownloadResult(
+            quarter=quarter,
+            archive=Path(raw_root_) / "archives" / f"ASCII-{quarter}.zip",
+            extracted_dir=Path(raw_root_) / quarter,
+            extracted=["DEMO24q1.txt", "DRUG24q1.txt", "REAC24q1.txt"],
+            skipped_existing=True,
+            archive_sha256="0" * 64,
+        )
+
+    monkeypatch.setattr(refresh, "download_quarter", fake_download)
+
+    report_path = tmp_path / "refresh_skips.json"
+    rc = refresh.main([
+        "--quarter", "2024q1",
+        "--min-cases", "1",
+        "--skip-concordance",
+        "--skip-regimes",
+        "--skip-profiles",
+        "--skip-confounding",
+        "--database-url", test_db_url,
+        "--raw-root", str(raw_root),
+        "--report", str(report_path),
+    ])
+    assert rc == 0
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "succeeded"
+    stages = report["stages"]
+    assert stages["concordance"]["status"] == "skipped"
+    assert stages["concordance"]["reason"] == "--skip-concordance"
+    assert stages["regimes"]["status"] == "skipped"
+    assert stages["regimes"]["reason"] == "--skip-regimes"
+    assert stages["profiles"]["status"] == "skipped"
+    assert stages["profiles"]["reason"] == "--skip-profiles"
+    assert stages["confounding"]["status"] == "skipped"
+    assert stages["confounding"]["reason"] == "--skip-confounding"
+

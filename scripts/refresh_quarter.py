@@ -305,8 +305,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.quarter_dir:
             print(f"[refresh] {quarter}: --quarter-dir given, skipping "
                   f"download; using {extract_dir}")
+            report["stages"]["download"] = {
+                "status": "skipped", "reason": "--quarter-dir given"}
         elif args.skip_download:
             print(f"[refresh] {quarter}: --skip-download; using {extract_dir}")
+            report["stages"]["download"] = {
+                "status": "skipped", "reason": "--skip-download"}
         else:
             dl = download_quarter(quarter, raw_root, force=args.force_download)
             extract_dir = dl.extracted_dir
@@ -330,7 +334,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         ingest_argv = ["--database-url", database_url]
         if args.quarter_dir:
-            ingest_argv += ["--quarter-dirs", f"{quarter}={extract_dir}"]
+            # raw-root still matters: dedup falls back to it for every other
+            # loaded quarter's DEMO files (spec §7)
+            ingest_argv += ["--quarter-dirs", f"{quarter}={extract_dir}",
+                            "--raw-root", str(raw_root)]
         else:
             ingest_argv += ["--quarters", quarter, "--raw-root", str(raw_root)]
         rc = ingestion_main(ingest_argv)
