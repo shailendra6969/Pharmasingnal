@@ -99,6 +99,46 @@ def test_preflight_inspection_runs_cleanly_on_test_db():
         conn.close()
 
 
+RUNBOOK = MIGRATION_DIR / "RUNBOOK.md"
+
+
+def test_runbook_covers_the_execution_sequence():
+    """The operator runbook must cover every step the migration is gated on."""
+    assert RUNBOOK.is_file(), "operator runbook is missing from the package"
+    text = RUNBOOK.read_text(encoding="utf-8").lower()
+    for required in (
+        "backup and restore rehearsal",   # section 1
+        "quiesce",                        # section 2
+        "--snapshot",                     # section 3
+        "forward.sql",                    # section 4
+        "postflight_inspection.sql",      # section 4
+        "report_figures.py", "--diff",   # section 4: the post-execution proof
+        "compute_signals.py", "--mode both",  # section 5: immediate recompute
+        "rollback.sql",                   # section 6
+        "evidence log",                   # section 7
+    ):
+        assert required in text, f"runbook does not cover {required!r}"
+
+
+def test_runbook_psql_commands_carry_the_connection_string():
+    """psql does not read DATABASE_URL, so every invocation must pass it.
+
+    Regression: the first draft of the runbook ran `psql -v ON_ERROR_STOP=1 -f
+    forward.sql` without a connection string, which fails with exit 2 before
+    executing anything — exactly the failure mode an operator must not meet
+    mid-window.
+    """
+    text = RUNBOOK.read_text(encoding="utf-8")
+    offenders = [
+        line for line in text.splitlines()
+        if line.lstrip().startswith("psql")
+        and " -f " in line
+        and "$DATABASE_URL" not in line
+        and "postgresql://" not in line
+    ]
+    assert offenders == [], f"psql -f without a connection string: {offenders}"
+
+
 def test_migration_functional_lifecycle_on_test_db():
     """Verify forward + rollback lifecycle against isolated temp tables.
 
