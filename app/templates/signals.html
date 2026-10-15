@@ -115,7 +115,7 @@
 <section class="glass-card" id="results-table-card">
   <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:0.5rem;">
     <div style="font-size:0.9rem; color:var(--text-secondary);">
-      Showing <strong>{{ signals.items|length }}</strong> of <strong>{{ "{:,}".format(signals.total) }}</strong> matching signals
+      Showing <strong>{{ signals['items']|length }}</strong> of <strong>{{ "{:,}".format(signals.total) }}</strong> matching signals
       (Page {{ signals.page }} of {{ signals.total_pages }})
     </div>
     <div style="font-size:0.8rem; font-family:var(--font-mono); color:var(--text-muted);">
@@ -139,8 +139,8 @@
         </tr>
       </thead>
       <tbody>
-        {% if signals.items %}
-          {% for s in signals.items %}
+        {% if signals['items'] %}
+          {% for s in signals['items'] %}
           <tr>
             <td>
               <a href="/drugs/{{ s.drug }}" style="color:#fff; font-weight:600; text-decoration:none;" class="hover-underline">

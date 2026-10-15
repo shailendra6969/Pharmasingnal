@@ -1,4 +1,4 @@
-"""API integration tests (spec §47): /api/health and /api/data-quality."""
+"""API + web-page integration tests (spec §14–17, §47)."""
 from __future__ import annotations
 
 import pytest
@@ -85,3 +85,18 @@ def test_data_quality_empty_database_returns_null_report():
 def test_unknown_route_is_json_404(client):
     res = client.get("/api/nope")
     assert res.status_code == 404
+
+
+def test_signals_page_renders(client):
+    """The /signals list page must render (spec §14–17), not return 500.
+
+    Regression: the template read ``signals.items``, which Jinja resolves to
+    ``dict.items`` (the bound method) instead of the ``items`` key, crashing
+    ``|length`` and the row loop. No test exercised page routes, so the suite
+    stayed green while ``GET /signals`` 500'd live.
+    """
+    res = client.get("/signals")
+    assert res.status_code == 200
+    body = res.get_data(as_text=True)
+    assert "matching signals" in body
+    assert "500 Internal Server Error" not in body

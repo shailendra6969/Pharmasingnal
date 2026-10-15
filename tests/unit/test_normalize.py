@@ -32,6 +32,54 @@ def test_drug_deterministic():
     assert a == b == "SERTRALINE"
 
 
+def test_focus_drug_brand_aliases():
+    """Explicit brand-to-ingredient mappings for the 5 focus drugs."""
+    assert nz.normalize_drug_name("LIPITOR") == "ATORVASTATIN"
+    assert nz.normalize_drug_name("GLUCOPHAGE") == "METFORMIN"
+    assert nz.normalize_drug_name("GLUCOPHAGE XR") == "METFORMIN"
+    assert nz.normalize_drug_name("ADVIL") == "IBUPROFEN"
+    assert nz.normalize_drug_name("MOTRIN") == "IBUPROFEN"
+    assert nz.normalize_drug_name("PRILOSEC") == "OMEPRAZOLE"
+    assert nz.normalize_drug_name("ZOLOFT") == "SERTRALINE"
+
+
+def test_focus_drug_case_and_whitespace():
+    """Case-insensitive and whitespace-collapsed brand name normalization."""
+    assert nz.normalize_drug_name("  lipitor  ") == "ATORVASTATIN"
+    assert nz.normalize_drug_name("Glucophage") == "METFORMIN"
+    assert nz.normalize_drug_name("  glucophage   xr  ") == "METFORMIN"
+    assert nz.normalize_drug_name("advil") == "IBUPROFEN"
+    assert nz.normalize_drug_name("  Motrin  ") == "IBUPROFEN"
+    assert nz.normalize_drug_name("prilosec") == "OMEPRAZOLE"
+    assert nz.normalize_drug_name("  Zoloft ") == "SERTRALINE"
+
+
+def test_combination_products_remain_distinct():
+    """Multi-active-ingredient combination products must NEVER be merged
+    blindly into single-ingredient canonical names."""
+    assert nz.normalize_drug_name("ADVIL PM") == "ADVIL PM"
+    assert nz.normalize_drug_name("ADVIL DUAL ACTION") == "ADVIL DUAL ACTION"
+    assert nz.normalize_drug_name("MOTRIN PM") == "MOTRIN PM"
+    assert nz.normalize_drug_name("CADUET") == "CADUET"
+    assert nz.normalize_drug_name("LIPTRUZET") == "LIPTRUZET"
+    assert nz.normalize_drug_name("JANUMET") == "JANUMET"
+    assert nz.normalize_drug_name("GLUCOVANCE") == "GLUCOVANCE"
+    assert nz.normalize_drug_name("SYNJARDY") == "SYNJARDY"
+    assert nz.normalize_drug_name("ZEGERID") == "ZEGERID"
+    assert nz.normalize_drug_name("VIMOVO") == "VIMOVO"
+
+
+def test_distinct_active_ingredients_remain_distinct():
+    """Chemically distinct agents in the same or related classes must
+    remain separate and never collide."""
+    assert nz.normalize_drug_name("CRESTOR") == "CRESTOR"         # Rosuvastatin != Atorvastatin
+    assert nz.normalize_drug_name("NEXIUM") == "NEXIUM"           # Esomeprazole != Omeprazole
+    assert nz.normalize_drug_name("PROZAC") == "PROZAC"           # Fluoxetine != Sertraline
+    assert nz.normalize_drug_name("ALEVE") == "ALEVE"             # Naproxen != Ibuprofen
+    assert nz.normalize_drug_name("JANUVIA") == "JANUVIA"         # Sitagliptin != Metformin
+
+
+
 # ---- age -------------------------------------------------------------------
 
 @pytest.mark.parametrize("age,cod,expected", [

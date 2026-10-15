@@ -1,0 +1,236 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-15T17:37:19+00:00",
+  "background_n": 2831775,
+  "brand_counts": {
+    "ADVIL": 5225,
+    "GLUCOPHAGE": 1745,
+    "GLUCOPHAGE XR": 428,
+    "LIPITOR": 11712,
+    "MOTRIN": 1447,
+    "PRILOSEC": 3890,
+    "ZOLOFT": 6651
+  },
+  "targets": {
+    "IBUPROFEN": {
+      "generic": 29207,
+      "brand": 4907,
+      "coreported": 348,
+      "both_brands": 63
+    },
+    "ATORVASTATIN": {
+      "generic": 66207,
+      "brand": 8880,
+      "coreported": 682,
+      "both_brands": 0
+    },
+    "OMEPRAZOLE": {
+      "generic": 44491,
+      "brand": 3078,
+      "coreported": 243,
+      "both_brands": 0
+    },
+    "SERTRALINE": {
+      "generic": 25272,
+      "brand": 5255,
+      "coreported": 292,
+      "both_brands": 0
+    },
+    "METFORMIN": {
+      "generic": 53686,
+      "brand": 1648,
+      "coreported": 297,
+      "both_brands": 4
+    }
+  },
+  "pairs": [
+    {
+      "label": "**ATORVASTATIN / RHABDOMYOLYSIS**",
+      "source": "Existing Baseline `[Independently recomputed]`",
+      "drugs": [
+        "ATORVASTATIN"
+      ],
+      "event": "RHABDOMYOLYSIS",
+      "a": 909,
+      "b": 65298,
+      "c": 4134,
+      "d": 2761434
+    },
+    {
+      "label": "**LIPITOR / RHABDOMYOLYSIS**",
+      "source": "Existing Baseline `[Independently recomputed]`",
+      "drugs": [
+        "LIPITOR"
+      ],
+      "event": "RHABDOMYOLYSIS",
+      "a": 21,
+      "b": 8859,
+      "c": 5022,
+      "d": 2817873
+    },
+    {
+      "label": "**ATORVASTATIN (Consolidated) / RHABDOMYOLYSIS**",
+      "source": "Projected `[Projected]`",
+      "drugs": [
+        "ATORVASTATIN",
+        "LIPITOR"
+      ],
+      "event": "RHABDOMYOLYSIS",
+      "a": 929,
+      "b": 73476,
+      "c": 4114,
+      "d": 2753256
+    },
+    {
+      "label": "**IBUPROFEN / GASTRIC ULCER**",
+      "source": "Existing Baseline `[Independently recomputed]`",
+      "drugs": [
+        "IBUPROFEN"
+      ],
+      "event": "GASTRIC ULCER",
+      "a": 166,
+      "b": 29041,
+      "c": 1870,
+      "d": 2800698
+    },
+    {
+      "label": "**ADVIL / GASTRIC ULCER**",
+      "source": "Existing Baseline `[Independently recomputed]`",
+      "drugs": [
+        "ADVIL"
+      ],
+      "event": "GASTRIC ULCER",
+      "a": 28,
+      "b": 3878,
+      "c": 2008,
+      "d": 2825861
+    },
+    {
+      "label": "**IBUPROFEN (Consolidated) / GASTRIC ULCER**",
+      "source": "Projected `[Projected]`",
+      "drugs": [
+        "IBUPROFEN",
+        "ADVIL",
+        "MOTRIN"
+      ],
+      "event": "GASTRIC ULCER",
+      "a": 192,
+      "b": 33574,
+      "c": 1844,
+      "d": 2796165
+    },
+    {
+      "label": "**METFORMIN / LACTIC ACIDOSIS**",
+      "source": "Existing Baseline `[Independently recomputed]`",
+      "drugs": [
+        "METFORMIN"
+      ],
+      "event": "LACTIC ACIDOSIS",
+      "a": 3490,
+      "b": 50196,
+      "c": 1870,
+      "d": 2776219
+    },
+    {
+      "label": "**GLUCOPHAGE, GLUCOPHAGE XR / LACTIC ACIDOSIS**",
+      "source": "Existing Baseline `[Independently recomputed]`",
+      "drugs": [
+        "GLUCOPHAGE",
+        "GLUCOPHAGE XR"
+      ],
+      "event": "LACTIC ACIDOSIS",
+      "a": 35,
+      "b": 1613,
+      "c": 5325,
+      "d": 2824802
+    },
+    {
+      "label": "**METFORMIN (Consolidated) / LACTIC ACIDOSIS**",
+      "source": "Projected `[Projected]`",
+      "drugs": [
+        "METFORMIN",
+        "GLUCOPHAGE",
+        "GLUCOPHAGE XR"
+      ],
+      "event": "LACTIC ACIDOSIS",
+      "a": 3522,
+      "b": 51515,
+      "c": 1838,
+      "d": 2774900
+    },
+    {
+      "label": "**OMEPRAZOLE / HYPOMAGNESAEMIA**",
+      "source": "Existing Baseline `[Independently recomputed]`",
+      "drugs": [
+        "OMEPRAZOLE"
+      ],
+      "event": "HYPOMAGNESAEMIA",
+      "a": 447,
+      "b": 44044,
+      "c": 1820,
+      "d": 2785464
+    },
+    {
+      "label": "**PRILOSEC / HYPOMAGNESAEMIA**",
+      "source": "Existing Baseline `[Independently recomputed]`",
+      "drugs": [
+        "PRILOSEC"
+      ],
+      "event": "HYPOMAGNESAEMIA",
+      "a": 10,
+      "b": 3068,
+      "c": 2257,
+      "d": 2826440
+    },
+    {
+      "label": "**OMEPRAZOLE (Consolidated) / HYPOMAGNESAEMIA**",
+      "source": "Projected `[Projected]`",
+      "drugs": [
+        "OMEPRAZOLE",
+        "PRILOSEC"
+      ],
+      "event": "HYPOMAGNESAEMIA",
+      "a": 457,
+      "b": 46869,
+      "c": 1810,
+      "d": 2782639
+    },
+    {
+      "label": "**SERTRALINE / SEROTONIN SYNDROME**",
+      "source": "Existing Baseline `[Independently recomputed]`",
+      "drugs": [
+        "SERTRALINE"
+      ],
+      "event": "SEROTONIN SYNDROME",
+      "a": 450,
+      "b": 24822,
+      "c": 2841,
+      "d": 2803662
+    },
+    {
+      "label": "**ZOLOFT / SEROTONIN SYNDROME**",
+      "source": "Existing Baseline `[Independently recomputed]`",
+      "drugs": [
+        "ZOLOFT"
+      ],
+      "event": "SEROTONIN SYNDROME",
+      "a": 13,
+      "b": 5242,
+      "c": 3278,
+      "d": 2823242
+    },
+    {
+      "label": "**SERTRALINE (Consolidated) / SEROTONIN SYNDROME**",
+      "source": "Projected `[Projected]`",
+      "drugs": [
+        "SERTRALINE",
+        "ZOLOFT"
+      ],
+      "event": "SEROTONIN SYNDROME",
+      "a": 462,
+      "b": 29773,
+      "c": 2829,
+      "d": 2798711
+    }
+  ]
+}
