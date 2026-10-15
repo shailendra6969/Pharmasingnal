@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<document xmlns="urn:hl7-org:v3">
+  <id root="sample-doc-id-v2"/>
+  <title>VERSIONED PRODUCT LABEL V2</title>
+  <effectiveTime value="20240201"/>
+  <setId root="sample-setid-versioned-005"/>
+  <versionNumber value="2"/>
+  <component>
+    <structuredBody>
+      <component>
+        <section>
+          <code code="34067-9" displayName="INDICATIONS &amp; USAGE SECTION"/>
+          <title>INDICATIONS</title>
+          <text><paragraph>Updated indications text in Version 2.</paragraph></text>
+        </section>
+      </component>
+      <component>
+        <section>
+          <code code="43685-7" displayName="WARNINGS AND PRECAUTIONS SECTION"/>
+          <title>WARNINGS</title>
+          <text><paragraph>Revised and expanded warnings text in Version 2 with new safety alert.</paragraph></text>
+        </section>
+      </component>
+      <component>
+        <section>
+          <code code="34084-4" displayName="ADVERSE REACTIONS SECTION"/>
+          <title>ADVERSE REACTIONS</title>
+          <text><paragraph>New adverse reactions section added in Version 2.</paragraph></text>
+        </section>
+      </component>
+    </structuredBody>
+  </component>
+</document>

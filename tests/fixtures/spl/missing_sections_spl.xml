@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<document xmlns="urn:hl7-org:v3">
+  <id root="sample-doc-id-missing"/>
+  <title>MINIMAL PRODUCT LABEL (NO WARNINGS OR ADVERSE REACTIONS)</title>
+  <effectiveTime value="20230601"/>
+  <setId root="sample-setid-missing-002"/>
+  <versionNumber value="1"/>
+  <author>
+    <assignedEntity>
+      <representedOrganization>
+        <name>Generic Pharma Corp</name>
+      </representedOrganization>
+    </assignedEntity>
+  </author>
+  <component>
+    <structuredBody>
+      <component>
+        <section>
+          <code code="34089-3" displayName="DESCRIPTION SECTION"/>
+          <title>DESCRIPTION</title>
+          <text>
+            <paragraph>Chemical description of the test compound.</paragraph>
+          </text>
+        </section>
+      </component>
+      <component>
+        <section>
+          <code code="34067-9" displayName="INDICATIONS &amp; USAGE SECTION"/>
+          <title>INDICATIONS AND USAGE</title>
+          <text>
+            <paragraph>Indicated for the relief of mild pain.</paragraph>
+          </text>
+        </section>
+      </component>
+    </structuredBody>
+  </component>
+</document>

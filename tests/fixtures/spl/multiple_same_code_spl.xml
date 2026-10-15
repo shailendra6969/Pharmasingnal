@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<document xmlns="urn:hl7-org:v3">
+  <id root="sample-doc-id-multi"/>
+  <title>MULTIPLE REPEATED SECTIONS LABEL</title>
+  <effectiveTime value="20231120"/>
+  <setId root="sample-setid-multi-003"/>
+  <versionNumber value="1"/>
+  <component>
+    <structuredBody>
+      <component>
+        <section>
+          <code code="34071-1" displayName="WARNINGS SECTION"/>
+          <title>WARNINGS PART 1</title>
+          <text>
+            <paragraph>First warning paragraph regarding cardiac toxicity.</paragraph>
+          </text>
+        </section>
+      </component>
+      <component>
+        <section>
+          <code code="34071-1" displayName="WARNINGS SECTION"/>
+          <title>WARNINGS PART 2</title>
+          <text>
+            <paragraph>Second warning paragraph regarding renal impairment.</paragraph>
+          </text>
+        </section>
+      </component>
+      <component>
+        <section>
+          <code code="42229-5" displayName="SPL UNCLASSIFIED SECTION"/>
+          <title>UNCLASSIFIED NOTE A</title>
+          <text>
+            <paragraph>Important special note A.</paragraph>
+          </text>
+        </section>
+      </component>
+      <component>
+        <section>
+          <code code="42229-5" displayName="SPL UNCLASSIFIED SECTION"/>
+          <title>UNCLASSIFIED NOTE B</title>
+          <text>
+            <paragraph>Important special note B.</paragraph>
+          </text>
+        </section>
+      </component>
+    </structuredBody>
+  </component>
+</document>

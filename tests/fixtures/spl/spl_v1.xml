@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<document xmlns="urn:hl7-org:v3">
+  <id root="sample-doc-id-v1"/>
+  <title>VERSIONED PRODUCT LABEL V1</title>
+  <effectiveTime value="20230101"/>
+  <setId root="sample-setid-versioned-005"/>
+  <versionNumber value="1"/>
+  <component>
+    <structuredBody>
+      <component>
+        <section>
+          <code code="34067-9" displayName="INDICATIONS &amp; USAGE SECTION"/>
+          <title>INDICATIONS</title>
+          <text><paragraph>Indications text in Version 1.</paragraph></text>
+        </section>
+      </component>
+      <component>
+        <section>
+          <code code="43685-7" displayName="WARNINGS AND PRECAUTIONS SECTION"/>
+          <title>WARNINGS</title>
+          <text><paragraph>Original warnings text in Version 1.</paragraph></text>
+        </section>
+      </component>
+    </structuredBody>
+  </component>
+</document>

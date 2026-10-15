@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<document xmlns="urn:hl7-org:v3">
+  <id root="sample-doc-id-nested"/>
+  <title>DEEPLY NESTED SUBSECTIONS LABEL</title>
+  <effectiveTime value="20240310"/>
+  <setId root="sample-setid-nested-004"/>
+  <versionNumber value="1"/>
+  <component>
+    <structuredBody>
+      <component>
+        <section>
+          <code code="43685-7" displayName="WARNINGS AND PRECAUTIONS SECTION"/>
+          <title>5 WARNINGS AND PRECAUTIONS</title>
+          <text>
+            <paragraph>Top-level warning text.</paragraph>
+          </text>
+          <component>
+            <section>
+              <code code="42229-5" displayName="SPL UNCLASSIFIED SECTION"/>
+              <title>5.1 Cardiovascular Effects</title>
+              <text>
+                <paragraph>Level 2 subsection text on cardiovascular effects.</paragraph>
+              </text>
+              <component>
+                <section>
+                  <code code="42229-5" displayName="SPL UNCLASSIFIED SECTION"/>
+                  <title>Cardiovascular Thrombotic Events</title>
+                  <text>
+                    <paragraph>Level 3 sub-subsection detail on thrombotic events.</paragraph>
+                  </text>
+                </section>
+              </component>
+            </section>
+          </component>
+        </section>
+      </component>
+    </structuredBody>
+  </component>
+</document>
