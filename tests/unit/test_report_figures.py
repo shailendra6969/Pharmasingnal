@@ -7,25 +7,42 @@ verification is `python scripts/report_figures.py --check` (exit 1 on drift).
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
+from app.statistics.disproportionality import Table2x2, compute
 from scripts.report_figures import (
+    CRIT_A,
+    CRIT_CHI2,
+    CRIT_PRR,
+    CRITERIA,
     FOCUS,
     HEADER_71,
+    HEADER_75_CRITERIA,
+    HEADER_75_DETAIL,
+    HEADER_75_SUMMARY,
     PAIR_ROWS,
     PROJECTED_SRC,
     SNAPSHOT_SCHEMA,
     PairFigure,
     ReportError,
+    ScreenAnalysis,
+    ScreenRow,
     TargetFigure,
+    TargetScreen,
     build_snapshot,
     check_report,
     diff_snapshot,
+    failing_criteria,
     load_snapshot,
     render_71_rows,
     render_72_rows,
     render_73_rows,
+    render_75_criteria_rows,
+    render_75_detail_rows,
+    render_75_summary_rows,
+    render_75_tables,
     table_data_span,
     write_report,
 )
@@ -338,3 +355,142 @@ def test_diff_flags_brand_row_still_carrying_cases():
     violations, _stats = diff_snapshot(build_snapshot(pre), post)
     label = PAIR_ROWS[idx][0]
     assert any("partial state" in v and label in v for v in violations)
+
+
+# ---------------------------------------------------------------------------
+# §7.5: screen-threshold crossings (crossers / droppers)
+# ---------------------------------------------------------------------------
+
+N75 = 100_000
+
+
+def _row75(target: str, event: str, crosses: bool,
+           before_cells: tuple[int, int, int, int],
+           after_cells: tuple[int, int, int, int]) -> ScreenRow:
+    before = compute(Table2x2(*before_cells))
+    after = compute(Table2x2(*after_cells))
+    return ScreenRow(target=target, event=event, crosses=crosses,
+                     before=PairFigure(*before_cells),
+                     after=PairFigure(*after_cells),
+                     before_stat=before, after_stat=after,
+                     flipped=failing_criteria(before if crosses else after))
+
+
+def _screen_analysis(rows: list[ScreenRow],
+                     targets: dict[str, TargetScreen] | None = None,
+                     ) -> ScreenAnalysis:
+    if targets is None:
+        zero = TargetScreen(0, 0, 0, 0, 0, 0)
+        targets = {t.generic: zero for t in FOCUS}
+    return ScreenAnalysis(background_n=N75, targets=targets,
+                          brand_screened={b: 0 for b in
+                                          (b for t in FOCUS for b in t.brands)},
+                          rows=tuple(rows))
+
+
+def test_failing_criteria_is_the_exact_negation_of_prr_screen():
+    """A signal passes the screen iff failing_criteria() returns empty."""
+    tables = [
+        Table2x2(50, 950, 950, 98_050),      # passes
+        Table2x2(2, 998, 950, 98_050),       # a < 3
+        Table2x2(20, 980, 9_900, 89_100),    # PRR < 2
+        Table2x2(3, 9_997, 2_000, 88_000),   # weak association -> chi2 < 4
+        Table2x2(0, 100, 900, 98_900),       # a = 0
+        Table2x2(40, 0, 960, 99_000),        # zero cell -> continuity-corrected
+    ]
+    for t in tables:
+        stat = compute(t)
+        assert (failing_criteria(stat) == ()) == stat.prr_screen, t
+
+
+def test_render_75_detail_rows_exact_format():
+    # Physically consistent cells: the crosser's brand adds 40 cases that all
+    # carry the event (enrichment); the dropper's brand adds 40,000 event-free
+    # cases (dilution). Both conserve N = 100,000 and the event marginal.
+    crosser = _row75("ATORVASTATIN", "FATIGUE", True,
+                     (2, 1_998, 998, 97_002),      # fails a-floor and PRR
+                     (42, 1_998, 958, 97_002))     # passes all three
+    dropper = _row75("SERTRALINE", "SEPSIS", False,
+                     (5_000, 5_000, 15_000, 75_000),   # PRR 3.00, passes
+                     (5_000, 45_000, 15_000, 35_000))  # PRR 0.33, fails
+    rows = render_75_detail_rows(_screen_analysis([crosser, dropper]))
+
+    # chi-square is Yates-corrected, so those cells are pinned by shape only.
+    assert re.fullmatch(
+        r"\| \*\*ATORVASTATIN\*\* \| `FATIGUE` \| Cross \| 2 → 42 \| "
+        r"0\.10 → 2\.11 \| [\d,.]+ → [\d,.]+ \| "
+        r"\$a \\ge 3\$, \$\\text\{PRR\} \\ge 2\.0\$ \|",
+        rows[0],
+    ), rows[0]
+    assert re.fullmatch(
+        r"\| \*\*SERTRALINE\*\* \| `SEPSIS` \| Drop \| 5,000 → 5,000 \| "
+        r"3\.00 → 0\.33 \| [\d,.]+ → [\d,.]+ \| "
+        r"\$\\text\{PRR\} \\ge 2\.0\$ \|",
+        rows[1],
+    ), rows[1]
+
+def test_render_75_detail_rows_rejects_background_drift():
+    """Both states must sit on the invariant background N, like §7.3 rows."""
+    bad = _row75("METFORMIN", "SOME EVENT", True,
+                 (2, 1_998, 998, 97_001),        # sums to N75 - 1
+                 (42, 1_998, 958, 97_002))
+    with pytest.raises(ReportError, match="background N not conserved"):
+        render_75_detail_rows(_screen_analysis([bad]))
+
+
+def test_render_75_summary_rows_close_and_sign_the_net():
+    crosser = _row75("ATORVASTATIN", "FATIGUE", True,
+                     (2, 1_998, 998, 97_002), (42, 1_998, 958, 97_002))
+    dropper = _row75("SERTRALINE", "SEPSIS", False,
+                     (5_000, 5_000, 15_000, 75_000),
+                     (5_000, 45_000, 15_000, 35_000))
+    zero = TargetScreen(0, 0, 0, 0, 0, 0)
+    targets = {t.generic: zero for t in FOCUS}
+    targets["ATORVASTATIN"] = TargetScreen(10, 3, 4, 1, 0, 7)
+    targets["SERTRALINE"] = TargetScreen(8, 5, 4, 0, 1, 0)
+
+    rows = render_75_summary_rows(
+        _screen_analysis([crosser, dropper], targets))
+    assert rows[0] == "| **ATORVASTATIN** (Lipitor) | 10 | 3 | 4 | 1 | 0 | +1 | 7 |"
+    assert rows[4] == "| **SERTRALINE** (Zoloft) | 8 | 5 | 4 | 0 | 1 | -1 | 0 |"
+    assert rows[5] == "| **All five focus targets** | 18 | 8 | 8 | 1 | 1 | +0 | 7 |"
+
+
+def test_render_75_summary_rejects_tally_that_does_not_close():
+    zero = TargetScreen(0, 0, 0, 0, 0, 0)
+    targets = {t.generic: zero for t in FOCUS}
+    targets["METFORMIN"] = TargetScreen(10, 3, 5, 1, 0, 0)   # 3 + 1 != 5
+    with pytest.raises(ReportError, match="does not close"):
+        render_75_summary_rows(_screen_analysis([], targets))
+
+
+def test_render_75_summary_rejects_transition_rows_disagreeing_with_tally():
+    """A tally that closes but has no matching transition rows must not render."""
+    zero = TargetScreen(0, 0, 0, 0, 0, 0)
+    targets = {t.generic: zero for t in FOCUS}
+    targets["ATORVASTATIN"] = TargetScreen(10, 3, 4, 1, 0, 0)   # closes: 3+1=4
+    with pytest.raises(ReportError, match="disagree with tally"):
+        render_75_summary_rows(_screen_analysis([], targets))
+
+
+def test_render_75_criteria_rows_cover_all_three_criteria_in_order():
+    crosser = _row75("ATORVASTATIN", "FATIGUE", True,
+                     (2, 1_998, 998, 97_002), (42, 1_998, 958, 97_002))
+    dropper = _row75("SERTRALINE", "SEPSIS", False,
+                     (5_000, 5_000, 15_000, 75_000),
+                     (5_000, 45_000, 15_000, 35_000))
+    rows = render_75_criteria_rows(_screen_analysis([crosser, dropper]))
+    assert [r.split("|")[1].strip() for r in rows] == list(CRITERIA)
+    assert rows[0] == f"| {CRIT_A} | 1 | 0 |"        # crosser missed the floor
+    assert rows[1] == f"| {CRIT_PRR} | 1 | 1 |"
+    assert rows[2] == f"| {CRIT_CHI2} | 0 | 0 |"
+
+
+def test_render_75_tables_exposes_all_three_headers():
+    tables = render_75_tables(_screen_analysis([]))
+    assert set(tables) == {
+        HEADER_75_SUMMARY, HEADER_75_CRITERIA, HEADER_75_DETAIL,
+    }
+    assert len(tables[HEADER_75_SUMMARY]) == 6     # 5 targets + total
+    assert len(tables[HEADER_75_DETAIL]) == 0
+    assert len(tables[HEADER_75_CRITERIA]) == 3

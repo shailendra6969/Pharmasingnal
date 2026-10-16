@@ -1,0 +1,112 @@
+# Dedicated CI for the migration 004 operator path
+# (docs/migrations/004_focus_drug_brand_aliases/RUNBOOK.md):
+#
+#   1. the scratch-database lifecycle rehearsal — forward.sql → postflight →
+#      rollback.sql executed for real, with every guard (double execution,
+#      NULL-drug_seq collision with no partial write, double rollback,
+#      forward blocked after a rollback);
+#   2. the report-figure snapshot/diff guards — the runbook §3/§4 tooling, both
+#      the database-free unit tests and the real-database CLI roundtrip
+#      (snapshot → diff at baseline → injected background-N movement fails).
+#
+# Everything here runs against TEST_DATABASE_URL on the job's own ephemeral
+# PostgreSQL service. CI holds no production credentials, and the tests skip
+# silently if the service is down — so a reachability step fails the job loud
+# before they can.
+name: migration-004-rehearsal
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "scripts/**"
+      - "tests/**"
+      - "migrations/**"
+      - "docs/migrations/**"
+      - "requirements.txt"
+      - "pytest.ini"
+      - ".github/workflows/migration-004.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "scripts/**"
+      - "tests/**"
+      - "migrations/**"
+      - "docs/migrations/**"
+      - "requirements.txt"
+      - "pytest.ini"
+      - ".github/workflows/migration-004.yml"
+
+concurrency:
+  group: migration-004-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  migration-004-rehearsal:
+    name: rehearsal + snapshot/diff guards (PostgreSQL ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # The runbook was rehearsed on PostgreSQL 14; bump deliberately.
+        postgres: ["14"]
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_PASSWORD: postgres
+          # The reachability step below connects to the test database, so the
+          # service must create it at startup — otherwise a healthy service
+          # fails the check for want of a database, and the check exists only
+          # to turn a *dead* service red.
+          POSTGRES_DB: pharmasignal_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pharmasignal_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned dependencies
+        run: python -m pip install -r requirements.txt
+
+      # The DB-backed tests skip (not fail) when PostgreSQL is unreachable —
+      # correct locally, but in CI a dead service must turn the job red.
+      - name: PostgreSQL is reachable (a dead service must fail, not skip)
+        run: |
+          python -c "import psycopg2; from app.config import settings; \
+          conn = psycopg2.connect(settings.test_database_url()); conn.close(); \
+          print('reachable:', settings.test_database_url().rsplit('@', 1)[1])"
+
+      - name: Create and migrate the CI test database
+        run: |
+          python -c "from scripts.create_databases import ensure_database; \
+          from app.config import settings; ensure_database(settings.test_database_url())"
+          python scripts/migrate.py --test
+
+      - name: Report-figure snapshot/diff guards (unit + real-database CLI)
+        run: >
+          pytest tests/unit/test_report_figures.py
+          tests/unit/test_migration_report_figures.py
+          tests/integration/test_report_figures_cli.py
+
+      - name: Scratch-database rehearsal (forward → postflight → rollback, and §5 recompute → verify)
+        run: >
+          pytest tests/unit/test_migration_sql.py
+          tests/unit/test_verify_migration004.py
+          tests/integration/test_verify_migration004.py

@@ -3,6 +3,7 @@
 
 # Data (spec §55: large raw datasets out of Git)
 data/raw/
+backup/
 data/processed/
 !data/samples/
 !data/samples/**

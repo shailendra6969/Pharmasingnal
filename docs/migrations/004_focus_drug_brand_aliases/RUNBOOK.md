@@ -18,12 +18,22 @@ Client tools verified on this host: PostgreSQL 14.17 (`psql`, `pg_dump`, `pg_res
 > applies it and `schema_migrations` stays at **4**. It is applied by an operator, once,
 > from this runbook. Do not add it to `migrate.py`.
 
+> **Measured window timings** (full-size rehearsal on a restored production copy,
+> 2026-10-16, `pharmasignal_staging`): dump **58 s** (689 MB) · restore **~87 min** ·
+> §3 snapshot **18 s** · forward **45 s** · `--diff` **24 s** · recompute
+> `--mode both` **~20 min** · concordance **~20 s** · confounding **~2 min** ·
+> quality **~20 s** · verifier **<5 s** · rollback **26 s** + baseline recompute
+> **~19 min**. Budget the window at **25–30 min** (forward + recompute + verification);
+> the ~87 min restore belongs to the §1 rehearsal and must never sit inside the window.
+
 ---
 
 ## 0. Go / no-go — every box must be checked before the window opens
 
 - [ ] Package reviewed and approved; test suite green
-      (`pytest` → 201 passed; includes the SQL-contract, report-figure and snapshot/diff guards).
+      (`pytest -q` → exit 0 — includes the SQL-contract, snapshot/diff and runbook-coverage
+      guards, plus a forward → postflight → rollback rehearsal executed on a scratch
+      database, guards included, so §4/§6 are known to run end-to-end before you open the window).
 - [ ] **Backup taken and restore rehearsal completed** (§1) — a backup that has never been
       restored is not a backup. Restore duration recorded and budgeted.
 - [ ] Quiesced window scheduled with the API/ingestion owners (§2).
@@ -72,12 +82,14 @@ Rehearsal acceptance (record all three numbers in the evidence log):
 | :--- | :--- |
 | brand rows | 31,098 |
 | current cases | 2,831,775 |
-| `signal_scores` rows | 2,148,484 |
+| `signal_scores` rows | 2,139,259 |
 
 Use the rehearsal database to rehearse §4/§5 timing end-to-end (forward → diff →
 recompute) and record how long the recompute takes; that measured duration sets the
-window length. Keep the dump until §7 passes; drop the scratch database only after the
-window closes.
+window length. This was done at full size on 2026-10-16 — restore ~87 min, forward
+45 s, `--diff` 24 s, recompute ~20 min (timings at the top of this runbook); re-measure
+in every rehearsal rather than reusing the numbers blindly. Keep the dump until §7
+passes; drop the scratch database only after the window closes.
 
 ---
 
@@ -113,14 +125,22 @@ Records every figure §7 depends on; after execution it becomes the proof that o
 expected rows moved (§4).
 
 ```bash
-.venv/bin/python scripts/report_figures.py --snapshot
+.venv/bin/python scripts/report_figures.py --snapshot --force
 # [report-figures] baseline snapshot written: docs/migrations/004_focus_drug_brand_aliases/figures_baseline_snapshot.json
+#   (<timestamp>, N=2,831,775, 15 pair rows)
 ```
 
 - [ ] File written, exit 0. Keep it — do not edit or delete it.
-- If any ingestion happened since the previous snapshot, re-take with `--force`.
-- If a snapshot already exists and you did **not** re-take it, stop: an outdated
-  baseline turns the §4 proof into noise.
+- **`--force` is required:** the package already ships a baseline snapshot, and without
+  it `--snapshot` exits 2 having written nothing. That refusal is the guard against
+  silently reusing a stale baseline — re-taking it inside the window is the correct
+  action, not an error to work around. Never skip §3 just because a file exists; an
+  outdated baseline turns the §4 proof into noise.
+- Take it with no ingestion in flight, and do not re-run §3 after `forward.sql`: a
+  rename must not change the case population, so background N and every event marginal
+  must hold exactly for §4's proof to mean anything.
+- [ ] Sanity: the fresh snapshot reports `N=2,831,775` and brand counts totalling
+      31,098 (§0). If not, you are on the wrong database — stop.
 
 ---
 
@@ -149,8 +169,9 @@ the before-image snapshot and the `UPDATE`, so the audit trail and the change co
 together or not at all; three guards abort on double-execution, on unique-index
 collision risk, and on any postflight mismatch. The `UPDATE` takes row-level locks on
 31,098 rows only — readers continue, and an abort leaves the table byte-identical to
-before. Expected duration: seconds (measured in the rehearsal); if it runs beyond a few
-minutes, treat it as a surprise and investigate rather than waiting it out.
+before. Expected duration: ~45 s at full size (measured in the 2026-10-16 rehearsal); if
+it runs beyond a few minutes, treat it as a surprise and investigate rather than waiting
+it out.
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X -f "$MIG/postflight_inspection.sql"
@@ -169,29 +190,28 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X -f "$MIG/postflight_inspection.sql"
 
 ## 5. Immediate signal recomputation (same window — mandatory)
 
-`signal_scores` still holds **2,148,484** pre-migration contingency tables; until this
+`signal_scores` still holds **2,139,259** pre-migration contingency tables; until this
 step completes, every published signal uses the old denominators.
 
 ```bash
-.venv/bin/python scripts/compute_signals.py --mode both --min-cases 3   # longest step: measure in rehearsal
+.venv/bin/python scripts/compute_signals.py --mode both --min-cases 3   # longest step: ~20 min measured (2026-10-16 full-size rehearsal)
 .venv/bin/python scripts/validate_concordance.py
 .venv/bin/python scripts/probe_confounding.py
 .venv/bin/python scripts/summarize_quality.py
 ```
 
-Post-recompute acceptance — the §7.3 projections must have become reality:
+Post-recompute acceptance — the §7.3 projections must have become reality.
+No hand-run SQL: the verifier reads the §3 baseline snapshot (the same artifact
+`--diff` uses), asserts the five projected pairs' stored cells equal the
+projection, that **no** `signal_scores` row of any period or mode names a
+retired brand (`brand_scores = 0`), and that those five rows agree with cells
+recomputed from the live tables, so a row left stale by a partial recompute
+cannot pass. Exit 0 = acceptance met, 1 = failed (copy the stderr into the
+evidence log), 2 = could not run.
 
 ```bash
-psql "$DATABASE_URL" -X -c "
-  SELECT drug, event, a, b, c, d FROM signal_scores
-  WHERE period='all' AND NOT primary_suspect_mode AND (
-        (drug='ATORVASTATIN' AND event='RHABDOMYOLYSIS') OR
-        (drug='IBUPROFEN'    AND event='GASTRIC ULCER')  OR
-        (drug='METFORMIN'    AND event='LACTIC ACIDOSIS') OR
-        (drug='OMEPRAZOLE'   AND event='HYPOMAGNESAEMIA') OR
-        (drug='SERTRALINE'   AND event='SEROTONIN SYNDROME')) ORDER BY drug;" \
-   -c "SELECT count(*) AS brand_scores FROM signal_scores
-        WHERE drug IN ('LIPITOR','GLUCOPHAGE','GLUCOPHAGE XR','ADVIL','MOTRIN','PRILOSEC','ZOLOFT')"
+.venv/bin/python scripts/verify_migration004.py
+# [verify-004] PASS: 5/5 projected pairs match, brand_scores = 0, no stale rows — §5 acceptance met
 ```
 
 - [ ] The five pairs equal the §7.3 *Projected* rows exactly
@@ -199,6 +219,17 @@ psql "$DATABASE_URL" -X -c "
       457/46,869/1,810/2,782,639 · 462/29,773/2,829/2,798,711).
 - [ ] `brand_scores` = **0** (no score references a retired brand name). It is
       **7,398** today, so this check is a real before/after gate, not a formality.
+- [ ] §7.5's projected screening totals became real: **7,949** focus-drug signals pass
+      the PRR screen (it is **7,378** today — 830 crossings, 259 drops, enumerated per
+      event in §7.5). A mismatch means a projection assumption failed: stop and
+      investigate before publishing anything.
+
+  ```bash
+  psql "$DATABASE_URL" -X -c "
+    SELECT count(*) AS focus_screened FROM signal_scores
+    WHERE period='all' AND NOT primary_suspect_mode AND prr_screen
+      AND drug IN ('ATORVASTATIN','METFORMIN','IBUPROFEN','OMEPRAZOLE','SERTRALINE');"
+  ```
 - [ ] Concordance, confounding and quality reports regenerated without error.
 
 **Not refreshed by design:** the frozen `signal_scores_q1only` snapshot table. Regenerate
@@ -210,6 +241,7 @@ it as the pre-migration reference and say so in the ticket.
 ## 6. If anything fails — rollback
 
 ```bash
+MIG=docs/migrations/004_focus_drug_brand_aliases   # set again: §6 is often run from a fresh shell
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X -f "$MIG/rollback.sql"   # restores from the before-image only
 .venv/bin/python scripts/compute_signals.py --mode both --min-cases 3   # restore baseline scores
 .venv/bin/python scripts/report_figures.py --diff     # must return to: state=baseline, moved-as-expected=0
@@ -218,11 +250,36 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X -f "$MIG/rollback.sql"   # restores f
 - Rollback restores the exact pre-migration strings from `case_drugs_before_image`
   (never from `drug_original`), stamps `restored_at`, and refuses to run twice or against
   rows altered since the forward run.
+- Measured at full size (2026-10-16): rollback **~26 s**, baseline recompute **~19 min**,
+  final `--diff` **~10 s** — a rollback window is about as long as the forward window.
+- `scripts/verify_migration004.py` (§5) **fails by design after a rollback** — the pairs
+  are back at baseline and `brand_scores` is 7,398 again. §6's proof that the window
+  returned to baseline is `report_figures.py --diff` reporting `state=baseline`, not the
+  §5 verifier.
 - **Never re-ingest FAERS files to undo this migration** — ingestion cannot reproduce the
   pre-migration state of already-loaded quarters.
 - If rollback aborts with "rows no longer match expected post-migration value", stop and
   escalate: something outside the window touched `case_drugs`. Do not force it; the
   before-image still holds the recovery values.
+- **Re-attempting the forward run after a rollback:** `forward.sql`'s first guard keys on
+  the *presence* of before-image rows, not on `restored_at`, so a second forward attempt
+  aborts with `Before-image snapshot ... already exists` even though the data is back at
+  baseline (verified — the scratch rehearsal asserts it). Clearing it means moving the
+  spent snapshot out of the guard's way **without losing the audit trail**; only with
+  operator approval, and only after re-passing §0:
+
+  ```bash
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X -c "
+    CREATE TABLE case_drugs_before_image_spent AS
+      SELECT * FROM case_drugs_before_image
+      WHERE migration_id = '20261015_focus_drug_aliases';
+    DELETE FROM case_drugs_before_image
+      WHERE migration_id = '20261015_focus_drug_aliases';"
+  ```
+
+  Record both statements in the evidence log before running them. If you would rather not
+  touch the audit table at all, restore the §1 dump instead — it is byte-equivalent to the
+  rolled-back state — and end the window without retrying.
 
 ---
 
@@ -234,8 +291,10 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X -f "$MIG/rollback.sql"   # restores f
       below, in the ticket.
 - [ ] Note for future runs: `report_figures.py --check` compares §7 against the *live*
       database and is a **pre-execution** tool. After execution its §7.1/§7.2 brand-side
-      figures legitimately show zero; `--diff` (baseline vs current) is the
-      post-execution verification tool from here on.
+      figures legitimately show zero and §7.5's *Before* columns describe a state that
+      no longer exists; `--diff` (baseline vs current) is the post-execution
+      verification tool from here on. `--snapshot` and `--diff` skip §7.5's expensive
+      query on purpose, so the window stays fast.
 
 ---
 
@@ -252,5 +311,5 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -X -f "$MIG/rollback.sql"   # restores f
 | 7 | Postflight | snapshot rows / corrupted originals | 31,098 / 0 | | | |
 | 8 | Diff | `--diff` exit code + summary | exit 0, post-execution | | | |
 | 9 | Recompute | `compute_signals --mode both` duration | completed | | | |
-| 10 | Score check | 5 pairs + `brand_scores` | match §7.3 / 0 | | | |
+| 10 | Score check | `verify_migration004.py` exit code + summary | exit 0 | | | |
 | 11 | Reports | concordance / confounding / quality | regenerated | | | |

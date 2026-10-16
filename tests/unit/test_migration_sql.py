@@ -139,6 +139,222 @@ def test_runbook_psql_commands_carry_the_connection_string():
     assert offenders == [], f"psql -f without a connection string: {offenders}"
 
 
+def test_runbook_snapshot_and_rollback_commands_are_self_contained():
+    """Two operator-facing failure modes, pinned.
+
+    1. §3: the package ships a baseline snapshot, so a bare `--snapshot` exits 2
+       without writing — the documented command must carry `--force`.
+    2. §6: rollback is often run from a fresh shell mid-incident, so it must set
+       MIG itself instead of inheriting §4's variable.
+    """
+    text = RUNBOOK.read_text(encoding="utf-8")
+    assert "report_figures.py --snapshot --force" in text
+
+    section6 = text.split("## 6.", 1)[1].split("## 7.", 1)[0]
+    assert "MIG=" in section6, "§6 must define MIG before invoking $MIG/rollback.sql"
+    assert '-f "$MIG/rollback.sql"' in section6
+
+
+def _rehearsal_database() -> tuple[str, str]:
+    """(db_name, url) of an isolated scratch database for the lifecycle run."""
+    from urllib.parse import urlparse, urlunparse
+    from app.config import settings
+
+    parsed = urlparse(settings.test_database_url())
+    name = "pharmasignal_mig004_rehearsal"
+    return name, urlunparse(parsed._replace(path=f"/{name}"))
+
+
+def test_forward_postflight_rollback_execute_end_to_end():
+    """Execute the runbook's own SQL files for real, on a scratch database.
+
+    forward.sql / postflight_inspection.sql / rollback.sql are operator-gated
+    against production, so this is the only place they ever run. It mirrors
+    runbook §4 and §6 step-for-step and proves, with the files' actual text:
+
+      * preflight runs cleanly pre-migration (guarded before-image probe);
+      * guard 2 aborts a NULL-drug_seq unique-index collision AND the abort
+        leaves no trace (no before-image table, transaction fully rolled back);
+      * forward consolidates, the closing NOTICE reports the row count, and
+        postflight verifies 0 brand rows / exact snapshot / drug_original intact;
+      * guard 1 blocks double execution, rollback restores every string
+        bit-for-bit and stamps restored_at, the double-rollback guard fires,
+        and — the §6 retry note — forward stays blocked after a rollback.
+    """
+    import psycopg2
+    from scripts.create_databases import ensure_database
+    from scripts.migrate import apply_migrations
+
+    dbname, url = _rehearsal_database()
+    admin_url = url.rsplit("/", 1)[0] + "/postgres"
+
+    def _with_admin(sql: str) -> None:
+        conn = psycopg2.connect(admin_url)
+        conn.autocommit = True
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+        finally:
+            conn.close()
+
+    def run_file(name: str) -> tuple[bool, list[str], str]:
+        """Execute a package SQL file the way `psql -f` does (autocommit)."""
+        sql = (MIGRATION_DIR / name).read_text(encoding="utf-8")
+        conn = psycopg2.connect(url)
+        conn.autocommit = True
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+            return True, list(conn.notices), ""
+        except psycopg2.Error as exc:
+            return False, list(conn.notices), str(exc).strip().splitlines()[0]
+        finally:
+            conn.close()
+
+    def query(sql: str, params: tuple = ()):
+        conn = psycopg2.connect(url)
+        conn.autocommit = True
+        try:
+            with conn.cursor() as cur:
+                # No params -> no %% interpolation, so literal % in the SQL
+                # (e.g. LIKE 'RBK%') stays intact.
+                if params:
+                    cur.execute(sql, params)
+                else:
+                    cur.execute(sql)
+                if cur.description:
+                    return cur.fetchall()
+                return None
+        finally:
+            conn.close()
+
+    try:
+        _with_admin(f'DROP DATABASE IF EXISTS "{dbname}"')   # stale-run leftovers
+        ensure_database(url)
+        apply_migrations(url)
+    except psycopg2.OperationalError as exc:
+        pytest.skip(f"PostgreSQL not available for lifecycle test: {exc}")
+
+    try:
+        # ---- seed: 7 brand rows, 2 controls, a NULL-drug_seq brand, ---------
+        # ---- and a case that would collide under guard 2 ---------------------
+        conn = psycopg2.connect(url)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO cases (primaryid, case_id, source_quarter) VALUES
+                        ('RBK1001','RBKC01','2024q1'), ('RBK1002','RBKC02','2024q1'),
+                        ('RBK1003','RBKC03','2024q1'), ('RBK1004','RBKC04','2024q1'),
+                        ('RBK1005','RBKC05','2024q1'), ('RBK1006','RBKC06','2024q1'),
+                        ('RBK1007','RBKC07','2024q1'), ('RBK1008','RBKC08','2024q1'),
+                        ('RBK1009','RBKC09','2024q1'), ('RBK1010','RBKC10','2024q1'),
+                        ('RBK1011','RBKC11','2024q1');
+                """)
+                cur.execute("""
+                    INSERT INTO case_drugs (primaryid, case_id, drug_seq,
+                                            drug_normalized, drug_original, role)
+                    VALUES
+                        ('RBK1001','RBKC01','1','LIPITOR','Lipitor 20mg tab','PS'),
+                        ('RBK1002','RBKC02','1','GLUCOPHAGE','Glucophage 500mg','PS'),
+                        ('RBK1003','RBKC03','1','GLUCOPHAGE XR','Glucophage XR 750mg','PS'),
+                        ('RBK1004','RBKC04','1','ADVIL','Advil Liqui-Gels','PS'),
+                        ('RBK1005','RBKC05','1','MOTRIN','Motrin IB','PS'),
+                        ('RBK1006','RBKC06','1','PRILOSEC','Prilosec OTC','PS'),
+                        ('RBK1007','RBKC07','1','ZOLOFT','Zoloft 50mg','PS'),
+                        ('RBK1008','RBKC08','1','CRESTOR','Crestor 10mg','PS'),
+                        ('RBK1009','RBKC09','1','JANUVIA','Januvia 100mg','PS'),
+                        ('RBK1010','RBKC10',NULL,'LIPITOR','Lipitor 10mg','PS'),
+                        ('RBK1011','RBKC11',NULL,'LIPITOR','Lipitor 40mg','PS'),
+                        ('RBK1011','RBKC11',NULL,'ATORVASTATIN',NULL,'CON');
+                """)
+            conn.commit()
+        finally:
+            conn.close()
+
+        # ---- §4.1: preflight runs cleanly on a pre-migration database -------
+        ok, _notices, err = run_file("preflight_inspection.sql")
+        assert ok, f"preflight must run cleanly pre-migration: {err}"
+
+        # ---- guard 2: NULL drug_seq collision aborts, leaving no trace -------
+        ok, _notices, err = run_file("forward.sql")
+        assert not ok, "forward must abort on a NULL-drug_seq unique-index collision"
+        assert "uq_case_drugs_pid_drug" in err
+        assert query("SELECT to_regclass('case_drugs_before_image')") == [(None,)], (
+            "an aborted forward must leave no before-image table behind"
+        )
+        assert query(
+            "SELECT count(*) FROM case_drugs WHERE primaryid = 'RBK1011'"
+        ) == [(2,)], "aborted transaction must roll back every statement"
+
+        # ---- clear the collision, then run §4 for real -----------------------
+        query("DELETE FROM case_drugs WHERE primaryid = 'RBK1011' "
+              "AND drug_normalized = 'ATORVASTATIN'")
+        ok, notices, err = run_file("forward.sql")
+        assert ok, f"forward must succeed: {err}"
+        assert any("Postflight PASSED: Consolidated 9 rows" in n for n in notices), notices
+
+        ok, _notices, err = run_file("postflight_inspection.sql")
+        assert ok, f"postflight must run cleanly after forward: {err}"
+        assert query(
+            "SELECT count(*) FROM case_drugs WHERE drug_normalized IN "
+            "('LIPITOR','GLUCOPHAGE','GLUCOPHAGE XR','ADVIL','MOTRIN',"
+            "'PRILOSEC','ZOLOFT')"
+        ) == [(0,)], "zero targeted brand rows may remain"
+        assert query("SELECT count(*) FROM case_drugs_before_image "
+                     "WHERE migration_id = '20261015_focus_drug_aliases' ") == [(9,)]
+        assert query("SELECT count(*) FROM case_drugs_before_image "
+                     "WHERE migration_id = '20261015_focus_drug_aliases' "
+                     "AND restored_at IS NOT NULL") == [(0,)]
+        # drug_original preserved bit-for-bit; controls untouched
+        assert query(
+            "SELECT count(*) FROM case_drugs cd JOIN case_drugs_before_image b "
+            "ON b.case_drug_id = cd.id "
+            "WHERE b.migration_id = '20261015_focus_drug_aliases' "
+            "AND cd.drug_original IS DISTINCT FROM b.drug_original"
+        ) == [(0,)]
+        assert query("SELECT drug_normalized FROM case_drugs WHERE primaryid IN "
+                     "('RBK1008','RBK1009') ORDER BY primaryid") \
+            == [("CRESTOR",), ("JANUVIA",)]
+        assert query("SELECT drug_normalized FROM case_drugs WHERE primaryid = 'RBK1002'") \
+            == [("METFORMIN",)]
+
+        # ---- guard 1: double execution blocked -------------------------------
+        ok, _notices, err = run_file("forward.sql")
+        assert not ok and "already exists" in err
+
+        # ---- §6: rollback restores every string exactly ----------------------
+        ok, notices, err = run_file("rollback.sql")
+        assert ok, f"rollback must succeed: {err}"
+        assert any("Rollback Postflight PASSED: All 9 rows restored" in n
+                   for n in notices), notices
+        assert query(
+            "SELECT drug_normalized FROM case_drugs "
+            "WHERE primaryid LIKE 'RBK%' AND drug_normalized IN "
+            "('LIPITOR','GLUCOPHAGE','GLUCOPHAGE XR','ADVIL','MOTRIN',"
+            "'PRILOSEC','ZOLOFT') ORDER BY primaryid"
+        ) == [("LIPITOR",), ("GLUCOPHAGE",), ("GLUCOPHAGE XR",), ("ADVIL",),
+              ("MOTRIN",), ("PRILOSEC",), ("ZOLOFT",), ("LIPITOR",),
+              ("LIPITOR",)]
+        assert query("SELECT count(*) FROM case_drugs_before_image "
+                     "WHERE migration_id = '20261015_focus_drug_aliases' "
+                     "AND restored_at IS NOT NULL") == [(9,)]
+
+        # ---- double rollback blocked, and forward stays blocked -------------
+        ok, _notices, err = run_file("rollback.sql")
+        assert not ok and "already restored" in err
+        ok, _notices, err = run_file("forward.sql")
+        assert not ok and "already exists" in err, (
+            "§6 retry note must hold: forward stays blocked after a rollback"
+        )
+    finally:
+        # Best-effort cleanup so a failed assertion does not strand the database;
+        # errors here must not mask the assertion that is actually being tested.
+        try:
+            _with_admin(f'DROP DATABASE IF EXISTS "{dbname}"')
+        except psycopg2.Error:
+            pass
+
+
 def test_migration_functional_lifecycle_on_test_db():
     """Verify forward + rollback lifecycle against isolated temp tables.
 

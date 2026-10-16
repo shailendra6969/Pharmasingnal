@@ -12,6 +12,12 @@ database with read-only SQL, so the prose can never silently drift from the data
     python scripts/report_figures.py --snapshot   # record baseline figures (before execution)
     python scripts/report_figures.py --diff       # prove only expected rows moved (after)
 
+Sections 7.1-7.5 are all derived here. Section 7.5 (focus-drug signals crossing
+or dropping the screen threshold a>=3 AND PRR>=2 AND chi2>=4 under
+consolidation) needs one heavy query over case_events (~90 s on the full
+database), so --check/--write/--json compute it and --snapshot/--diff skip it:
+those two run inside the migration window where minutes matter.
+
 Snapshot workflow around a migration execution:
 
     1. --snapshot            immediately before forward.sql  (exit 0, writes JSON)
@@ -43,6 +49,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.config import settings                      # noqa: E402
 from app.repositories import loader                  # noqa: E402
 from app.statistics.disproportionality import (      # noqa: E402
+    SignalStat,
     Table2x2,
     compute,
 )
@@ -128,6 +135,22 @@ HEADER_72 = ("| Focus Target | Generic Cases `[Measured]` | "
              "Denominator Increase `[Projected]` |")
 HEADER_73 = ("| Drug / Event Pair | Source / State | $a$ | $b$ | $c$ | $d$ | "
              "PRR [95% CI] | ROR [95% CI] | $\\chi^2$ |")
+HEADER_75_SUMMARY = ("| Focus Target | Candidate Events | Screened Before | "
+                     "Screened After | Crossed | Dropped | Net Change | "
+                     "Brand Signals Screened Today (Folded Away) |")
+HEADER_75_CRITERIA = ("| Flipping Criterion | Crossers (was failing, now passes) | "
+                      "Droppers (was passing, now fails) |")
+HEADER_75_DETAIL = ("| Focus Target | Event | Transition | $a$ | PRR | $\\chi^2$ | "
+                    "Flipped Threshold(s) |")
+
+# The screen rule itself, spelled the way section 7.4 spells it (spec 9).
+CRIT_A = "$a \\ge 3$"
+CRIT_PRR = "$\\text{PRR} \\ge 2.0$"
+CRIT_CHI2 = "$\\chi^2 \\ge 4.0$"
+CRITERIA = (CRIT_A, CRIT_PRR, CRIT_CHI2)
+SCREEN_MIN_CASES = 3
+SCREEN_PRR = 2.0
+SCREEN_CHI2 = 4.0
 
 
 class ReportError(RuntimeError):
@@ -152,6 +175,39 @@ class PairFigure:
     b: int
     c: int
     d: int
+
+
+@dataclass(frozen=True)
+class ScreenRow:
+    """One focus-drug event whose screen status changes under consolidation."""
+    target: str                 # generic name of the focus target
+    event: str
+    crosses: bool               # False -> drops out of the screen
+    before: PairFigure          # generic-name cells (pre-migration)
+    after: PairFigure           # generic U brand cells (post-migration)
+    before_stat: SignalStat
+    after_stat: SignalStat
+    flipped: tuple[str, ...]    # criteria failing before (cross) / after (drop)
+
+
+@dataclass(frozen=True)
+class TargetScreen:
+    """Screen-status tally for one focus target across all its events."""
+    events: int                 # candidate (target, event) signals
+    screened_before: int
+    screened_after: int
+    crossed: int
+    dropped: int
+    brand_screened: int         # brand-named signals passing today (folded away)
+
+
+@dataclass(frozen=True)
+class ScreenAnalysis:
+    """Everything section 7.5 renders, derived in one read-only pass."""
+    background_n: int                       # invariant across both states
+    targets: dict[str, TargetScreen]     # keyed by generic name, FOCUS order
+    brand_screened: dict[str, int]       # brand -> signals passing today
+    rows: tuple[ScreenRow, ...]          # every crossing/dropping signal
 
 
 # ---------------------------------------------------------------------------
@@ -316,6 +372,172 @@ def fetch_figures(conn) -> dict:
             "targets": targets, "pairs": pairs}
 
 
+def fetch_screen_transitions(conn) -> ScreenAnalysis:
+    """Classify every focus-drug event's screen status before vs after.
+
+    Screen rule (spec §9): a >= 3 AND PRR >= 2.0 AND chi-square >= 4.0, i.e.
+    exactly `compute().prr_screen`, so the classification is the same predicate
+    the engine stores in signal_scores.prr_screen.
+
+    The projection is exact, not an estimate. Consolidation only renames rows in
+    case_drugs, so the post-execution 2x2 for a focus target is today's table
+    with the drug set replaced by generic ∪ brands — computed with the engine's
+    own arithmetic (app/statistics/engine.py: b = drug_n - a, c = event_n - a,
+    d = N - a - b - c) over DISTINCT current cases. Measured check: the
+    "before" column reproduces the generic and brand rows currently flagged
+    prr_screen in signal_scores exactly, so "after" predicts the post-recompute
+    flags exactly for focus drugs (section 7.4's caveat covers the other ~2.1M
+    signals, whose background cells also move).
+    """
+    background_n = fetch_background_n(conn)
+    values_sql, map_params = _drug_map_values()
+
+    # Drug totals: distinct current cases per generic name, per brand, per union.
+    totals_sql = f"""
+        WITH c AS (SELECT primaryid FROM cases WHERE is_current),
+             map AS (SELECT * FROM (VALUES {values_sql}) AS v(dn, tgt, is_gen)),
+             hits AS (
+                 SELECT m.tgt, m.dn, cd.primaryid
+                 FROM case_drugs cd
+                 JOIN c ON c.primaryid = cd.primaryid
+                 JOIN map m ON m.dn = cd.drug_normalized
+             )
+        SELECT 'dn', dn, count(DISTINCT primaryid) FROM hits GROUP BY dn
+        UNION ALL
+        SELECT 'tgt', tgt, count(DISTINCT primaryid) FROM hits GROUP BY tgt
+    """
+    # Per-pair co-occurrence counts plus the event marginal (a + c), which
+    # consolidation cannot move: it only shifts cases between drug groups.
+    pairs_sql = f"""
+        WITH c AS (SELECT primaryid FROM cases WHERE is_current),
+             map AS (SELECT * FROM (VALUES {values_sql}) AS v(dn, tgt, is_gen)),
+             hits AS (
+                 SELECT m.tgt, m.dn, m.is_gen, cd.primaryid
+                 FROM case_drugs cd
+                 JOIN c ON c.primaryid = cd.primaryid
+                 JOIN map m ON m.dn = cd.drug_normalized
+             ),
+             hev AS (
+                 SELECT h.tgt, h.dn, h.is_gen, h.primaryid, ev.event_term
+                 FROM hits h
+                 JOIN c ON c.primaryid = h.primaryid
+                 JOIN case_events ev ON ev.primaryid = h.primaryid
+             ),
+             pair_tgt AS (
+                 SELECT tgt, event_term,
+                        count(DISTINCT primaryid) FILTER (WHERE is_gen) AS a_g,
+                        count(DISTINCT primaryid) AS a_u
+                 FROM hev GROUP BY tgt, event_term
+             ),
+             pair_dn AS (
+                 SELECT dn, event_term, count(DISTINCT primaryid) AS a_b
+                 FROM hev WHERE NOT is_gen GROUP BY dn, event_term
+             ),
+             needed AS MATERIALIZED (
+                 -- Pinned: inlined, the planner may drive this join from the
+                 -- ~30k event terms via index scans (minutes); materialised it
+                 -- is hashed once against a single case_events scan (~70 s).
+                 SELECT DISTINCT event_term FROM pair_tgt
+             ),
+             em AS (
+                 SELECT ev.event_term, count(DISTINCT ev.primaryid) AS m
+                 FROM c JOIN case_events ev ON ev.primaryid = c.primaryid
+                 JOIN needed n ON n.event_term = ev.event_term
+                 GROUP BY ev.event_term
+             )
+        SELECT 'tgt', tgt, event_term, a_g, a_u, em.m
+          FROM pair_tgt JOIN em USING (event_term)
+        UNION ALL
+        SELECT 'dn', dn, event_term, 0, a_b, em.m
+          FROM pair_dn JOIN em USING (event_term)
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(totals_sql, map_params)
+        totals: dict[str, dict[str, int]] = {"dn": {}, "tgt": {}}
+        for kind, name, n in cur.fetchall():
+            totals[kind][name] = int(n)
+        cur.execute(pairs_sql, map_params)
+        pair_rows = cur.fetchall()
+
+    def stat(a: int, drug_n: int, m: int) -> SignalStat:
+        return compute(Table2x2(a, drug_n - a, m - a,
+                                background_n - drug_n - m + a))
+
+    per_target: dict[str, dict[str, int]] = {
+        t.generic: {"events": 0, "screened_before": 0, "screened_after": 0,
+                    "crossed": 0, "dropped": 0}
+        for t in FOCUS
+    }
+    brand_screened: dict[str, int] = {b: 0 for b in ALL_BRANDS}
+    transitions: list[ScreenRow] = []
+
+    for kind, name, event, a_g, a_x, m in pair_rows:
+        if kind == "dn":                      # brand-named signal, measured today
+            if stat(a_x, totals["dn"][name], m).prr_screen:
+                brand_screened[name] += 1
+            continue
+
+        tally = per_target[name]
+        tally["events"] += 1
+        before = stat(a_g, totals["dn"][name], m)
+        after = stat(a_x, totals["tgt"][name], m)
+        tally["screened_before"] += int(before.prr_screen)
+        tally["screened_after"] += int(after.prr_screen)
+        if before.prr_screen == after.prr_screen:
+            continue
+        crosses = bool(after.prr_screen)
+        tally["crossed" if crosses else "dropped"] += 1
+        flipped = failing_criteria(before if crosses else after)
+        if not flipped:
+            raise ReportError(
+                f"{name} / {event}: screen flipped without a failing criterion "
+                f"(before={before.prr_screen}, after={after.prr_screen})"
+            )
+        transitions.append(ScreenRow(
+            target=name, event=event, crosses=crosses,
+            before=PairFigure(before.a, before.b, before.c, before.d),
+            after=PairFigure(after.a, after.b, after.c, after.d),
+            before_stat=before, after_stat=after, flipped=flipped,
+        ))
+
+    order = {t.generic: i for i, t in enumerate(FOCUS)}
+    transitions.sort(key=lambda r: (order[r.target], not r.crosses, r.event))
+
+    targets = {
+        t.generic: TargetScreen(
+            events=tally["events"],
+            screened_before=tally["screened_before"],
+            screened_after=tally["screened_after"],
+            crossed=tally["crossed"],
+            dropped=tally["dropped"],
+            brand_screened=sum(brand_screened[b] for b in t.brands),
+        )
+        for t in FOCUS
+        for tally in (per_target[t.generic],)
+    }
+    return ScreenAnalysis(background_n=background_n, targets=targets,
+                          brand_screened=brand_screened,
+                          rows=tuple(transitions))
+
+
+def failing_criteria(st: SignalStat) -> tuple[str, ...]:
+    """Screen criteria this statistic fails, in fixed report order.
+
+    Mirrors compute().prr_screen exactly, including the undefined cases (PRR is
+    None when c == 0, chi-square when a margin degenerates) — a signal passes
+    the screen if and only if this returns empty.
+    """
+    failed: list[str] = []
+    if st.a < SCREEN_MIN_CASES:
+        failed.append(CRIT_A)
+    if st.prr is None or st.prr < SCREEN_PRR:
+        failed.append(CRIT_PRR)
+    if st.chi_square is None or st.chi_square < SCREEN_CHI2:
+        failed.append(CRIT_CHI2)
+    return tuple(failed)
+
+
 # ---------------------------------------------------------------------------
 # Rendering (must match the report byte-for-byte)
 # ---------------------------------------------------------------------------
@@ -383,6 +605,109 @@ def render_tables(figures: dict) -> dict[str, list[str]]:
         HEADER_71: render_71_rows(figures["brand_counts"]),
         HEADER_72: render_72_rows(figures["targets"]),
         HEADER_73: render_73_rows(figures["background_n"], figures["pairs"]),
+    }
+
+
+# ---------------------------------------------------------------------------
+# §7.5 rendering: which signals cross or drop the screen threshold
+# ---------------------------------------------------------------------------
+
+def _fmt_prr(st: SignalStat) -> str:
+    return "—" if st.prr is None else f"{st.prr:.2f}"
+
+
+def _fmt_chi2(st: SignalStat) -> str:
+    return "—" if st.chi_square is None else f"{st.chi_square:,.1f}"
+
+
+def render_75_summary_rows(analysis: ScreenAnalysis) -> list[str]:
+    """Per-target tallies; every row must close arithmetically or not render."""
+    recount = {t.generic: [0, 0] for t in FOCUS}
+    for row in analysis.rows:
+        recount[row.target][0 if row.crosses else 1] += 1
+
+    rows: list[str] = []
+    totals = dict(events=0, before=0, after=0, cross=0, drop=0, brand=0)
+    for target in FOCUS:
+        s = analysis.targets[target.generic]
+        if s.screened_after != s.screened_before - s.dropped + s.crossed:
+            raise ReportError(
+                f"{target.generic}: screen tally does not close "
+                f"({s.screened_before} before - {s.dropped} dropped + "
+                f"{s.crossed} crossed != {s.screened_after} after)"
+            )
+        if (s.crossed, s.dropped) != tuple(recount[target.generic]):
+            raise ReportError(
+                f"{target.generic}: transition rows ({recount[target.generic]}) "
+                f"disagree with tally ({s.crossed}, {s.dropped})"
+            )
+        net = s.crossed - s.dropped
+        rows.append(
+            f"| **{target.generic}** ({target.display}) | {s.events:,} | "
+            f"{s.screened_before:,} | {s.screened_after:,} | {s.crossed:,} | "
+            f"{s.dropped:,} | {net:+,} | {s.brand_screened:,} |"
+        )
+        totals["events"] += s.events
+        totals["before"] += s.screened_before
+        totals["after"] += s.screened_after
+        totals["cross"] += s.crossed
+        totals["drop"] += s.dropped
+        totals["brand"] += s.brand_screened
+
+    if totals["after"] != totals["before"] - totals["drop"] + totals["cross"]:
+        raise ReportError("§7.5 total row does not close")
+    net = totals["cross"] - totals["drop"]
+    rows.append(
+        f"| **All five focus targets** | {totals['events']:,} | "
+        f"{totals['before']:,} | {totals['after']:,} | {totals['cross']:,} | "
+        f"{totals['drop']:,} | {net:+,} | {totals['brand']:,} |"
+    )
+    return rows
+
+
+def render_75_criteria_rows(analysis: ScreenAnalysis) -> list[str]:
+    """How often each criterion is the one that flips (a signal may flip >1)."""
+    cross = {c: 0 for c in CRITERIA}
+    drop = {c: 0 for c in CRITERIA}
+    for row in analysis.rows:
+        if not row.flipped:
+            raise ReportError(f"{row.target} / {row.event}: empty flipped set")
+        for criterion in row.flipped:
+            if criterion not in CRITERIA:
+                raise ReportError(
+                    f"{row.target} / {row.event}: unknown criterion {criterion!r}"
+                )
+            (cross if row.crosses else drop)[criterion] += 1
+    return [f"| {c} | {cross[c]:,} | {drop[c]:,} |" for c in CRITERIA]
+
+
+def render_75_detail_rows(analysis: ScreenAnalysis) -> list[str]:
+    """Every crossing/dropping signal, in FOCUS order (crosses before drops)."""
+    rows: list[str] = []
+    for row in analysis.rows:
+        if (sum(row.before.__dict__.values()) != analysis.background_n
+                or sum(row.after.__dict__.values()) != analysis.background_n):
+            raise ReportError(
+                f"{row.target} / {row.event}: background N not conserved "
+                f"({row.before} / {row.after}, N={analysis.background_n:,})"
+            )
+        rows.append(
+            f"| **{row.target}** | `{row.event}` | "
+            f"{'Cross' if row.crosses else 'Drop'} | "
+            f"{row.before.a:,} → {row.after.a:,} | "
+            f"{_fmt_prr(row.before_stat)} → {_fmt_prr(row.after_stat)} | "
+            f"{_fmt_chi2(row.before_stat)} → {_fmt_chi2(row.after_stat)} | "
+            f"{', '.join(row.flipped)} |"
+        )
+    return rows
+
+
+def render_75_tables(analysis: ScreenAnalysis) -> dict[str, list[str]]:
+    """§7.5 headers -> expected data rows."""
+    return {
+        HEADER_75_SUMMARY: render_75_summary_rows(analysis),
+        HEADER_75_CRITERIA: render_75_criteria_rows(analysis),
+        HEADER_75_DETAIL: render_75_detail_rows(analysis),
     }
 
 
@@ -683,6 +1008,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     report_path = Path(args.report)
+    # Section 7.5 needs a heavy case_events pass (~90 s on the full database).
+    # --snapshot and --diff run inside the migration window and never use it,
+    # so they skip it; --check/--write/--json always include it.
+    want_75 = not (args.snapshot or args.diff)
+    screen: ScreenAnalysis | None = None
     try:
         conn = loader.connect(args.database_url or settings.database_url())
     except Exception as exc:                      # noqa: BLE001
@@ -690,7 +1020,18 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         figures = fetch_figures(conn)
-        tables = render_tables(figures)
+        # §7.1–§7.3 rendering is a pre-execution view: after the forward run the
+        # baseline brand pair rows (e.g. LIPITOR post-rename) have zero drug
+        # cases and their statistics are legitimately undefined — aborting
+        # --diff here would break the very tool the runbook uses to verify the
+        # execution. --snapshot/--diff consume raw figures only (diff_snapshot
+        # treats zeroed brand rows as the expected post-execution state), so
+        # render only for the modes that print tables.
+        tables = ({} if (args.snapshot or args.diff)
+                  else render_tables(figures))
+        if want_75:
+            screen = fetch_screen_transitions(conn)
+            tables = {**tables, **render_75_tables(screen)}
     except ReportError as exc:
         print(f"[report-figures] {exc}", file=sys.stderr)
         return 2
@@ -710,6 +1051,34 @@ def main(argv: list[str] | None = None) -> int:
                 for spec, fig in zip(PAIR_ROWS, figures["pairs"], strict=True)
             ],
             "tables": tables,
+            "screen_summary": (
+                None if screen is None else {
+                    "background_n": screen.background_n,
+                    "targets": {k: v.__dict__ for k, v in screen.targets.items()},
+                    "brand_screened": screen.brand_screened,
+                    "crossed": sum(1 for r in screen.rows if r.crosses),
+                    "dropped": sum(1 for r in screen.rows if not r.crosses),
+                }
+            ),
+            "screen_transitions": (
+                None if screen is None else [
+                    {
+                        "target": r.target,
+                        "event": r.event,
+                        "transition": "cross" if r.crosses else "drop",
+                        "before": {**r.before.__dict__,
+                                   "prr": r.before_stat.prr,
+                                   "chi_square": r.before_stat.chi_square,
+                                   "screen": r.before_stat.prr_screen},
+                        "after": {**r.after.__dict__,
+                                  "prr": r.after_stat.prr,
+                                  "chi_square": r.after_stat.chi_square,
+                                  "screen": r.after_stat.prr_screen},
+                        "flipped": list(r.flipped),
+                    }
+                    for r in screen.rows
+                ]
+            ),
         }
         print(json.dumps(payload, indent=2))
         return 0

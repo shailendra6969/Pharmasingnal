@@ -113,3 +113,82 @@ def test_report_cites_actual_case_drugs_row_count():
     assert match, "section 5 row-count claim not found"
     counted = int(match.group(1).replace(",", ""))
     assert counted > 3_365_490, "row-count claim was not updated"
+
+
+# ---------------------------------------------------------------------------
+# F4: section 7.5 — screen-threshold crossings must be internally consistent
+# ---------------------------------------------------------------------------
+
+CRITERION_LABELS = ["$a \\ge 3$", "$\\text{PRR} \\ge 2.0$", "$\\chi^2 \\ge 4.0$"]
+
+
+def _num(cell: str) -> int:
+    return int(cell.replace(",", "").replace("+", ""))
+
+
+def _tables_75() -> tuple[list[list[str]], list[list[str]], list[list[str]]]:
+    """Parse §7.5 into (summary, criteria, detail) rows of cells.
+
+    §7.5 is the last section of the report, so it runs to end of file.
+    """
+    text = REPORT.read_text(encoding="utf-8")
+    match = re.search(r"### 7\.5 Focus-Drug Signals.*$", text, re.S)
+    assert match, "section 7.5 not found in report"
+    summary: list[list[str]] = []
+    criteria: list[list[str]] = []
+    detail: list[list[str]] = []
+    for line in match.group(0).splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if cells[0].startswith(":---") or cells[0] in ("Focus Target",
+                                                        "Flipping Criterion"):
+            continue
+        {8: summary, 3: criteria, 7: detail}[len(cells)].append(cells)
+    assert summary and criteria and detail, "§7.5 tables are empty"
+    return summary, criteria, detail
+
+
+def test_section_75_summary_rows_close_arithmetically():
+    """F4a: screened_after == screened_before - dropped + crossed, per target."""
+    summary, _criteria, _detail = _tables_75()
+    assert len(summary) == 6, "expected 5 targets + one total row"
+    for cells in summary[:5]:
+        before, after, crossed, dropped, net = map(_num, cells[2:7])
+        assert after == before - dropped + crossed, cells[0]
+        assert net == crossed - dropped == after - before, cells[0]
+
+
+def test_section_75_total_row_equals_the_sum_of_targets():
+    summary, _criteria, _detail = _tables_75()
+    total = summary[5]
+    assert total[0] == "**All five focus targets**"
+    for column in range(2, 8):
+        assert _num(total[column]) == sum(_num(r[column]) for r in summary[:5]), \
+            f"total row column {column} is not the sum of the target rows"
+
+
+def test_section_75_detail_rows_match_the_summary_tallies():
+    """F4b: every crossing/dropping signal is listed exactly once."""
+    summary, _criteria, detail = _tables_75()
+    for cells in summary[:5]:
+        target = cells[0].split("**")[1]
+        crossed, dropped = _num(cells[4]), _num(cells[5])
+        mine = [d for d in detail if d[0] == f"**{target}**"]
+        assert sum(1 for d in mine if d[2] == "Cross") == crossed, target
+        assert sum(1 for d in mine if d[2] == "Drop") == dropped, target
+    for cells in detail:
+        assert cells[2] in ("Cross", "Drop"), cells
+        assert cells[6], f"empty flipped-threshold cell: {cells}"
+        for label in cells[6].split(", "):
+            assert label in CRITERION_LABELS, label
+
+
+def test_section_75_criteria_counts_are_bounded_by_transition_totals():
+    summary, criteria, _detail = _tables_75()
+    assert [c[0] for c in criteria] == CRITERION_LABELS
+    total_cross = sum(_num(r[4]) for r in summary[:5])
+    total_drop = sum(_num(r[5]) for r in summary[:5])
+    for label, cross_cell, drop_cell in criteria:
+        assert 0 <= _num(cross_cell) <= total_cross, label
+        assert 0 <= _num(drop_cell) <= total_drop, label
