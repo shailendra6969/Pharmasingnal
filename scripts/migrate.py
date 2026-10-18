@@ -9,11 +9,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import psycopg2
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# app before psycopg2: importing app runs the venv bootstrap (app/bootstrap.py),
+# so a system interpreter missing psycopg2 re-runs this script under .venv/
+# instead of dying on the import below.
 from app.config import settings  # noqa: E402
+import psycopg2  # noqa: E402
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
 

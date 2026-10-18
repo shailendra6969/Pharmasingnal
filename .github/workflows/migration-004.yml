@@ -25,6 +25,7 @@ on:
       - "tests/**"
       - "migrations/**"
       - "docs/migrations/**"
+      - "conftest.py"      # repo-root bootstrap: runs pytest under .venv/
       - "requirements.txt"
       - "pytest.ini"
       - ".github/workflows/migration-004.yml"
@@ -35,6 +36,7 @@ on:
       - "tests/**"
       - "migrations/**"
       - "docs/migrations/**"
+      - "conftest.py"      # repo-root bootstrap: runs pytest under .venv/
       - "requirements.txt"
       - "pytest.ini"
       - ".github/workflows/migration-004.yml"
