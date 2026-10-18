@@ -204,6 +204,57 @@ def test_write_report_repares_drift_and_is_idempotent():
 
 
 # ---------------------------------------------------------------------------
+# main(["--check"]) exit codes — the exact contract the scheduled
+# figures-drift job (.github/workflows/figures-drift.yml) relies on:
+# 0 = report matches the database, 1 = drift (job red). DB-free: only the
+# three database-touching calls are stubbed; rendering, locating, checking
+# and the exit code are the real code path.
+# ---------------------------------------------------------------------------
+
+def _check_cli(monkeypatch, tmp_path, doc: str) -> int:
+    from types import SimpleNamespace
+
+    import scripts.report_figures as rf
+
+    class _Conn:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(rf, "loader",
+                        SimpleNamespace(connect=lambda url: _Conn()))
+    monkeypatch.setattr(rf, "fetch_figures",
+                        lambda conn: {"background_n": 2_831_775})
+    monkeypatch.setattr(rf, "fetch_screen_transitions", lambda conn: None)
+    monkeypatch.setattr(rf, "render_tables",
+                        lambda figures: {HEADER_71: render_71_rows(ALL_BRAND_COUNTS)})
+    monkeypatch.setattr(rf, "render_75_tables", lambda screen: {})
+    report = tmp_path / "report.md"
+    report.write_text(doc, encoding="utf-8")
+    return rf.main(["--check", "--report", str(report)])
+
+
+def test_check_cli_exits_0_when_the_report_matches_the_database(
+        monkeypatch, tmp_path):
+    assert _check_cli(monkeypatch, tmp_path,
+                      _doc(render_71_rows(ALL_BRAND_COUNTS))) == 0
+
+
+def test_check_cli_exits_1_on_drift_and_says_how_to_repair(
+        monkeypatch, tmp_path, capsys):
+    """The drift job's contract: any drift must be exit 1, with the drifted
+    row and the repair command on stderr — not a bare non-zero code."""
+    expected = render_71_rows(ALL_BRAND_COUNTS)
+    stale = list(expected)
+    stale[0] = "| `LIPITOR` | `ATORVASTATIN` | 999 |"
+    assert _check_cli(monkeypatch, tmp_path, _doc(stale)) == 1
+    err = capsys.readouterr().err
+    assert "mismatch" in err
+    assert "| `LIPITOR` | `ATORVASTATIN` | 999 |" in err, \
+        "the drifted row must be listed"
+    assert "--write" in err, "stderr must name the repair command"
+
+
+# ---------------------------------------------------------------------------
 # Baseline snapshot / diff (pre-execution record, post-execution proof)
 # ---------------------------------------------------------------------------
 

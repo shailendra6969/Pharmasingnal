@@ -1,0 +1,111 @@
+# Scheduled drift guard for the migration 004 impact report
+# (docs/migrations/004-focus-drug-alias-migration.md).
+#
+# `scripts/report_figures.py --check` recomputes every report table from the
+# live database and exits 1 listing each drifted row (exit 2 = could not
+# connect or query). Run nightly against the production read-only replica,
+# any drift turns the job red: the committed report no longer describes what
+# production serves.
+#
+# A second, independent gate, `scripts/report_figures.py --diff`, compares the
+# live figures with the committed baseline snapshot
+# (docs/migrations/004_focus_drug_brand_aliases/figures_baseline_snapshot.json):
+# every figure must sit either exactly at the recorded pre-execution baseline
+# or at precisely the value consolidation produces. Ingestion — or any other
+# movement — in the migration window, and partial executions, are neither, so
+# this gate turns the job red even when the report tables above were
+# regenerated to match. It runs even if the first gate failed (but never
+# without the secret), so one red run shows which gate fired. CI only ever
+# diffs against the snapshot; re-taking it stays an operator action inside
+# the migration window.
+#
+# Safety, in two independent layers:
+#   1. the DSN is a secret (PRODUCTION_REPLICA_DATABASE_URL) held by a
+#      read-only role — ideally on a physical replica host;
+#   2. PGOPTIONS forces default_transaction_read_only=on for every connection
+#      in the check step, server-side — so even a future regression in the
+#      script cannot write to production from CI, whatever the DSN points at.
+#      (Verified locally: writes fail with ReadOnlySqlTransaction; the
+#      MySQL-ish spelling default_transaction_access_mode is rejected by
+#      PostgreSQL with "unrecognized configuration parameter".)
+#
+# This workflow is the ONLY one allowed to hold a production credential;
+# migration-004.yml must stay credential-free (pinned by
+# tests/unit/test_workflow_figures_drift.py).
+#
+# Required repository secret:
+#   PRODUCTION_REPLICA_DATABASE_URL — read-only replica DSN. The job fails
+#   loudly when it is absent: a drift guard that cannot run must be red,
+#   never green-by-skip.
+name: figures-drift
+
+on:
+  schedule:
+    # Daily 06:17 UTC — deliberately off the hour/ half-hour to dodge
+    # GitHub's top-of-minute cron congestion.
+    - cron: "17 6 * * *"
+  workflow_dispatch:        # manual runs, e.g. right after adding the secret
+
+permissions:
+  contents: read
+
+concurrency:
+  group: figures-drift
+  cancel-in-progress: false
+
+jobs:
+  report-figures-vs-production:
+    name: report figures vs production replica (read-only, fails on drift)
+    runs-on: ubuntu-latest
+    # The §7.5 screen pass alone takes ~90 s on the full 2.8 M-case
+    # background; a slower replica still fits comfortably in 30 minutes.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Replica credentials are configured (a missing secret must fail)
+        id: replica-secret
+        env:
+          PRODUCTION_REPLICA_DATABASE_URL: ${{ secrets.PRODUCTION_REPLICA_DATABASE_URL }}
+        run: |
+          if [ -z "$PRODUCTION_REPLICA_DATABASE_URL" ]; then
+            echo "::error::PRODUCTION_REPLICA_DATABASE_URL secret is not set — the drift guard cannot run"
+            exit 1
+          fi
+
+      # Exit codes: 0 = report matches production; 1 = drift (job red, each
+      # mismatch listed on stderr); 2 = connection/query failure (also red —
+      # an unverifiable guard is not a passing guard).
+      - name: Report figures match production (fails on any drift)
+        env:
+          PRODUCTION_REPLICA_DATABASE_URL: ${{ secrets.PRODUCTION_REPLICA_DATABASE_URL }}
+          PGOPTIONS: "-c default_transaction_read_only=on"
+        run: >-
+          python scripts/report_figures.py --check
+          --database-url "$PRODUCTION_REPLICA_DATABASE_URL"
+
+      # Second gate, same exit-code contract: 0 = figures sit exactly at the
+      # committed baseline (or at precisely the consolidation's
+      # post-execution values), 1 = unexpected movement, 2 = snapshot or
+      # database unusable — red either way. The `if:` keeps it running after a
+      # failing --check (so one red run shows which gate fired) but skips it
+      # when the secret guard failed: an empty DSN must never let the script
+      # fall back to its local default connection.
+      - name: Figures match the committed baseline snapshot (fails on movement)
+        if: ${{ !cancelled() && steps.replica-secret.outcome == 'success' }}
+        env:
+          PRODUCTION_REPLICA_DATABASE_URL: ${{ secrets.PRODUCTION_REPLICA_DATABASE_URL }}
+          PGOPTIONS: "-c default_transaction_read_only=on"
+        run: >-
+          python scripts/report_figures.py --diff
+          --snapshot-path docs/migrations/004_focus_drug_brand_aliases/figures_baseline_snapshot.json
+          --database-url "$PRODUCTION_REPLICA_DATABASE_URL"

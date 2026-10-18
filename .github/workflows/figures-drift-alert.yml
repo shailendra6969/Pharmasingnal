@@ -1,0 +1,95 @@
+# Weekly alert for the figures-drift guard (.github/workflows/figures-drift.yml).
+#
+# The drift guard turns red when the committed migration 004 report stops
+# matching production — but a red scheduled job is easy to miss. This
+# workflow runs weekly, reads the guard's run history via the API, and keeps
+# exactly one open issue per ongoing failure:
+#
+#   latest COMPLETED figures-drift run failed  -> open an issue, or refresh
+#       the existing one with the newest run link (never duplicates)
+#   latest completed run was green             -> close the open issue with
+#       a note, so the tracker reflects current state
+#   no completed runs yet (fresh repository)   -> do nothing
+#
+# Design constraints, pinned by tests/unit/test_workflow_figures_drift_alert.py:
+#   - built-in GITHUB_TOKEN only (actions:read + issues:write), never a PAT
+#     or repository secret;
+#   - no checkout, no dependencies — pure gh/jq on the runner image;
+#   - never triggered by pull_request — an issues:write token must not be
+#     reachable from fork PRs.
+name: figures-drift-alert
+
+on:
+  schedule:
+    # Weekly, Monday 07:43 UTC — deliberately off the hour, like figures-drift.
+    - cron: "43 7 * * 1"
+  workflow_dispatch:         # manual test runs
+
+permissions:
+  actions: read              # read the drift guard's run history
+  issues: write              # open / comment / close the alert issue
+
+concurrency:
+  group: figures-drift-alert
+  cancel-in-progress: false
+
+jobs:
+  alert-on-drift-failure:
+    name: alert when the figures-drift guard is failing
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      GH_TOKEN: ${{ github.token }}   # built-in token only, never a PAT
+      DRIFT_WORKFLOW: figures-drift.yml
+      ISSUE_MARKER: figures-drift
+
+    steps:
+      - name: Open, refresh or close the drift alert issue
+        run: |
+          set -euo pipefail
+
+          # Latest COMPLETED run of the guard (in-progress runs are ignored).
+          run_json=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${DRIFT_WORKFLOW}/runs?status=completed&per_page=1")
+          conclusion=$(jq -r '.workflow_runs[0].conclusion // empty' <<<"$run_json")
+
+          if [ -z "$conclusion" ]; then
+            echo "No completed ${DRIFT_WORKFLOW} runs yet — nothing to alert on."
+            exit 0
+          fi
+
+          run_url=$(jq -r '.workflow_runs[0].html_url' <<<"$run_json")
+          run_date=$(jq -r '.workflow_runs[0].created_at' <<<"$run_json")
+          open_issue=$(gh issue list --state open \
+            --search "${ISSUE_MARKER} in:title" --json number \
+            --jq '.[0].number // empty')
+
+          case "$conclusion" in
+            success)
+              if [ -n "$open_issue" ]; then
+                gh issue close "$open_issue" --comment \
+                  "figures-drift is green again (run ${run_date}): ${run_url} — report figures match production."
+              fi
+              ;;
+            failure|timed_out|cancelled)
+              body=$(cat <<EOF
+          The scheduled figures-drift guard failed (run from ${run_date}): ${run_url}
+
+          The committed migration 004 report no longer matches the figures the production read-only replica serves — or the guard could not reach the replica at all. Read the run log, decide which of the two happened, then either investigate the data drift or regenerate the report with scripts/report_figures.py --write once the movement is confirmed legitimate.
+
+          This issue is maintained automatically: refreshed on each failing weekly check, closed when the guard is green again.
+          EOF
+              )
+              if [ -n "$open_issue" ]; then
+                gh issue comment "$open_issue" --body \
+                  "Still failing as of ${run_date}: ${run_url}"
+              else
+                gh issue create \
+                  --title "[${ISSUE_MARKER}] report figures no longer match production" \
+                  --body "$body"
+              fi
+              ;;
+            *)
+              echo "Latest run conclusion '${conclusion}' — not alerting."
+              ;;
+          esac

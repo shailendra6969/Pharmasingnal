@@ -40,6 +40,13 @@ cp .env.example .env            # adjust DATABASE_URL if needed
 .venv/bin/python scripts/migrate.py --test   # test DB
 ```
 
+Activating `.venv` is optional: a bare `pytest`, `python scripts/<tool>.py` or
+`./scripts/<tool>.py` run on any interpreter (Anaconda base, Homebrew, system
+`python3`) detects — via `app/bootstrap.py` — that a pinned dependency such as
+`psycopg2` is missing and silently re-runs the same command under `.venv/`,
+keeping the exit code. In a complete interpreter (CI, Docker, an activated
+virtualenv) the bootstrap does nothing at all.
+
 ### Run the pipeline
 
 ```bash
@@ -87,8 +94,48 @@ Auth is a shared secret: set `ADMIN_API_KEY` (see `.env.example`) and send `Auth
 ### Tests
 
 ```bash
-.venv/bin/pytest          # unit + integration (integration needs local PostgreSQL)
+pytest                   # unit + integration (integration needs local PostgreSQL)
 ```
+
+Works with or without activating `.venv` — the interpreter bootstrap reruns
+the suite under `.venv/` if the interpreter on PATH lacks the pinned
+dependencies (see Setup above).
+
+### Scheduled figures-drift guard (CI)
+
+[.github/workflows/figures-drift.yml](.github/workflows/figures-drift.yml)
+runs `scripts/report_figures.py --check` nightly (06:17 UTC, plus manual
+dispatch) against the **production read-only replica** and fails on any drift
+between the committed migration 004 report and the figures production
+actually serves — exit 1 lists every drifted row, exit 2 (unreachable
+database) is also red, because an unverifiable guard is not a pass. It is the
+only workflow allowed to hold a production credential: it needs the
+`PRODUCTION_REPLICA_DATABASE_URL` repository secret (a read-only role) and
+fails loudly when that secret is absent. Independently of the role, every
+connection in the check step is forced read-only server-side
+(`PGOPTIONS="-c default_transaction_read_only=on"`), so even a future script
+regression cannot write to production from CI. A second, independent gate in
+the same job runs `scripts/report_figures.py --diff` against the committed
+baseline snapshot
+(`docs/migrations/004_focus_drug_brand_aliases/figures_baseline_snapshot.json`):
+every figure must sit exactly at the recorded pre-execution baseline or at
+precisely the value consolidation produces, so ingestion or any other
+movement in the migration window — and partial executions — turn the job red
+even when the report tables were regenerated to match. The diff gate runs
+after a failing check (so one red run shows which gate fired) but is skipped
+when the secret is missing, and CI never re-takes the snapshot. Never
+triggered by `pull_request`/`push`, so the DSN is unreachable from fork PRs;
+the contract is pinned by `tests/unit/test_workflow_figures_drift.py`.
+
+The weekly companion workflow
+[.github/workflows/figures-drift-alert.yml](.github/workflows/figures-drift-alert.yml)
+(Monday 07:43 UTC) reads the guard's completed-run history and keeps exactly
+one open GitHub issue per ongoing failure — created on the first failing
+check, refreshed with the newest run link while it keeps failing, and closed
+automatically once the guard is green again. It uses only the built-in
+`GITHUB_TOKEN` (actions:read + issues:write, no secrets), never runs the
+check itself, and does nothing while the guard has no completed runs; its
+contract is pinned by `tests/unit/test_workflow_figures_drift_alert.py`.
 
 ### Phase 1 methodology (summary; full detail in docs/)
 
