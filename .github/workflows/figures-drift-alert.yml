@@ -14,7 +14,10 @@
 # Design constraints, pinned by tests/unit/test_workflow_figures_drift_alert.py:
 #   - built-in GITHUB_TOKEN only (actions:read + issues:write), never a PAT
 #     or repository secret;
-#   - no checkout, no dependencies — pure gh/jq on the runner image;
+#   - no checkout, no dependencies — pure gh/jq on the runner image; GH_REPO
+#     names the repository explicitly, because without a checkout gh cannot
+#     discover it from a git remote (first real run died on "fatal: not a
+#     git repository" until this was set);
 #   - never triggered by pull_request — an issues:write token must not be
 #     reachable from fork PRs.
 name: figures-drift-alert
@@ -41,6 +44,7 @@ jobs:
 
     env:
       GH_TOKEN: ${{ github.token }}   # built-in token only, never a PAT
+      GH_REPO: ${{ github.repository }}   # no checkout: tell gh which repo to act on
       DRIFT_WORKFLOW: figures-drift.yml
       ISSUE_MARKER: figures-drift
 

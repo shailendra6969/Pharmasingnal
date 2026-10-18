@@ -137,3 +137,17 @@ def test_no_completed_runs_means_no_issue():
 
 def test_the_step_shell_is_strict():
     assert "set -euo pipefail" in _text()
+
+
+def test_gh_knows_the_repo_without_a_checkout():
+    """The job deliberately has no checkout step, so gh cannot discover the
+    repository from a git remote — GH_REPO must name it explicitly.
+
+    Regression: the first real run (2026-10-18) died with
+    "failed to run git: fatal: not a git repository" before touching any
+    issue, because gh fell back to git-remote discovery with nothing to find.
+    """
+    text = _text()
+    assert "GH_REPO: ${{ github.repository }}" in text
+    assert "actions/checkout" not in text, \
+        "the job's design is no checkout; GH_REPO is the substitute"
