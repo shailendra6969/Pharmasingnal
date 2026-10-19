@@ -47,6 +47,59 @@ Activating `.venv` is optional: a bare `pytest`, `python scripts/<tool>.py` or
 keeping the exit code. In a complete interpreter (CI, Docker, an activated
 virtualenv) the bootstrap does nothing at all.
 
+To see which interpreter a command would actually run under, and whether that
+fallback is armed, ask the bootstrap itself:
+
+```bash
+python -m app.bootstrap --check
+```
+
+It prints the repository root, the running interpreter, the pinned-dependency
+status, the `.venv/` target, the interpreter the bootstrap would *select*, and
+a machine-readable `venv_fallback_armed: true|false` line naming the condition
+behind it. Exit codes: **0** = configuration valid and an interpreter
+resolvable (complete here, or armed to re-run under `.venv/`), **1** = invalid
+or unresolvable (no `.venv/`, a broken `.venv/`, or an invocation that cannot
+be replayed), **2** = bad usage — so it doubles as a pre-flight probe in a CI
+job or runbook step before the real command is attempted — both project
+workflows open with it, so a misconfigured runner fails in seconds rather
+than minutes into the real work. It is strictly
+read-only: it never creates or repairs `.venv/`, never invokes pip, and never
+opens the database or the network.
+
+One caveat the self-test makes explicit: replaying a command line normally
+reads `sys.orig_argv`, which only exists on Python 3.10+. Interpreters older
+than that — notably macOS's `/usr/bin/python3` shim, which is 3.9 — have no
+real command line, so the bootstrap reconstructs one from what such an
+interpreter does keep (`sys.argv`, `__main__.__spec__`, and runpy's frame in
+the instant before the spec exists) and replays exactly as usual. The
+reconstruction cannot recover interpreter flags (`-i`, `-O`, `-X`), and an
+invocation that leaves no trace at all — a REPL, `python -c`, `python -` —
+still refuses with a message naming the interpreter's age and tells you to
+activate `.venv` instead.
+
+### Doctor
+
+The self-test answers one question — which interpreter would this command run
+under? The doctor answers the rest of the local setup in one pass:
+
+```bash
+python scripts/doctor.py            # offline; add --network to also ping DailyMed
+```
+
+It prints one `PASS` / `WARN` / `FAIL` line per check: the interpreter and
+bootstrap state in force, every `requirements.txt` pin importable *at the
+pinned version* (version drift included), `.env` configuration (key names
+only — never values) and which API keys are set, both database servers with
+their migration state, the
+committed test fixtures, and the FAERS / processed data directories. Warnings
+are normal on a fresh clone (no raw data, no LLM keys) and do not fail the
+run; only a `FAIL` marks a broken setup, each with the command that would fix
+it. Exit codes: **0** = no failing check, **1** = at least one check failed,
+**2** = bad usage. Like the self-test it is strictly read-only — PostgreSQL
+is touched with `SELECT`s only, and nothing is ever created or repaired
+inline.
+
 ### Run the pipeline
 
 ```bash

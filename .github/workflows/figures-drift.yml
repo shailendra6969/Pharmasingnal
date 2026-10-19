@@ -72,6 +72,15 @@ jobs:
       - name: Install pinned dependencies
         run: python -m pip install -r requirements.txt
 
+      # First validation step, credential-free: parses in seconds, so a
+      # runner whose `python` is not the interpreter that received the pins
+      # (PATH drift, partial pip cache, wrong environment) fails here instead
+      # of minutes into the drift computation. Exit 0 = interpreter complete
+      # or armed to re-run under .venv/; 1 = invalid or unresolvable (README,
+      # "the bootstrap").
+      - name: Interpreter bootstrap self-check (a misconfigured runner fails in seconds)
+        run: python -m app.bootstrap --check
+
       - name: Replica credentials are configured (a missing secret must fail)
         id: replica-secret
         env:

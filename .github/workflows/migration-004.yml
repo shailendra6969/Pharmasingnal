@@ -87,6 +87,13 @@ jobs:
       - name: Install pinned dependencies
         run: python -m pip install -r requirements.txt
 
+      # First validation step, credential-free: a runner whose `python` is
+      # not the interpreter that received the pins fails here in seconds,
+      # before any database work (README, "the bootstrap"). Exit 0 =
+      # interpreter complete or armed; 1 = invalid or unresolvable.
+      - name: Interpreter bootstrap self-check (a misconfigured runner fails in seconds)
+        run: python -m app.bootstrap --check
+
       # The DB-backed tests skip (not fail) when PostgreSQL is unreachable —
       # correct locally, but in CI a dead service must turn the job red.
       - name: PostgreSQL is reachable (a dead service must fail, not skip)

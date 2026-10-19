@@ -20,7 +20,10 @@ cannot silently weaken it:
    regenerated to match — same read-only/secret/exit-code contract, run even
    after a failing check but never without the secret;
 6. migration-004.yml keeps its documented promise of holding no production
-   credentials.
+   credentials;
+7. both project workflows open with `python -m app.bootstrap --check`, so a
+   runner whose python does not match the installed pins fails in seconds
+   instead of minutes into the real work.
 """
 from __future__ import annotations
 
@@ -178,3 +181,27 @@ def test_the_rehearsal_workflow_holds_no_production_credentials():
     other = REHEARSAL_WORKFLOW.read_text(encoding="utf-8")
     assert "PRODUCTION_REPLICA" not in other, \
         "migration-004.yml documents that CI holds no production credentials"
+
+
+# ---------------------------------------------------------------------------
+# 7. Fail fast: the bootstrap self-check is the first validation step.
+# ---------------------------------------------------------------------------
+
+def test_the_bootstrap_self_check_runs_before_the_drift_computation():
+    """A runner whose `python` is not the interpreter that received the pins
+    must go red in seconds, not minutes into the report recomputation."""
+    text = _text()
+    assert "python -m app.bootstrap --check" in text
+    check = text.index("python -m app.bootstrap --check")
+    # The heavy step's own invocation (the header comments mention the
+    # script's name without the `python` prefix).
+    heavy = text.index("python scripts/report_figures.py --check")
+    assert check < heavy, "self-check must come before the drift computation"
+
+
+def test_the_rehearsal_workflow_also_fails_fast_on_a_misconfigured_runner():
+    other = REHEARSAL_WORKFLOW.read_text(encoding="utf-8")
+    assert "python -m app.bootstrap --check" in other
+    assert other.index("python -m app.bootstrap --check") < \
+        other.index("pytest tests/unit/test_report_figures.py"), \
+        "self-check must come before the database-backed test steps"
