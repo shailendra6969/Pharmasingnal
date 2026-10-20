@@ -184,8 +184,18 @@ The weekly companion workflow
 [.github/workflows/figures-drift-alert.yml](.github/workflows/figures-drift-alert.yml)
 (Monday 07:43 UTC) reads the guard's completed-run history and keeps exactly
 one open GitHub issue per ongoing failure — created on the first failing
-check, refreshed with the newest run link while it keeps failing, and closed
-automatically once the guard is green again. It uses only the built-in
+check, refreshed while it keeps failing with a weekly digest comment stating
+how long the drift has persisted (the issue's own age in days and full
+weeks, uninterrupted since creation) plus the newest run link, and closed
+automatically once the guard is green again. Every failing issue is also
+triaged into a queue — a `severity: high` label (created on demand) plus the
+repository's assignee — asserted when the issue opens and re-asserted at
+every refresh, so it lands in someone's assigned-issues view rather than
+only in the tracker. When that open issue has
+survived **four consecutive weekly failures (28 days)**, the alert escalates
+it: an `escalated` label plus an `[ESCALATED]` title prefix, applied exactly
+once (the marker stays in the title, so the dedupe search still finds it,
+and the label stops week five from re-escalating). It uses only the built-in
 `GITHUB_TOKEN` (actions:read + issues:write, no secrets), never runs the
 check itself, and does nothing while the guard has no completed runs; its
 contract is pinned by `tests/unit/test_workflow_figures_drift_alert.py`.

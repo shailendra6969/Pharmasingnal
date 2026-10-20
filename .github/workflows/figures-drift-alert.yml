@@ -6,9 +6,18 @@
 # exactly one open issue per ongoing failure:
 #
 #   latest COMPLETED figures-drift run failed  -> open an issue, or refresh
-#       the existing one with the newest run link (never duplicates)
+#       the existing one with a weekly digest comment — how long the drift
+#       has persisted, plus the newest run link (never duplicates); every
+#       such issue is triaged into a queue — a `severity: high` label (made
+#       on demand) plus the repository's assignee — asserted when the issue
+#       is created and re-asserted on every refresh. Once that open issue
+#       has survived ESCALATE_AFTER_DAYS (28 = four weekly checks) with the
+#       guard still red, escalate it — an `escalated` label plus an
+#       [ESCALATED] title prefix, applied exactly once (the label is also
+#       what stops week five, six … re-escalating)
 #   latest completed run was green             -> close the open issue with
-#       a note, so the tracker reflects current state
+#       a note, so the tracker reflects current state; the escalation dies
+#       with the issue, so the next failure opens a fresh unprefixed one
 #   no completed runs yet (fresh repository)   -> do nothing
 #
 # Design constraints, pinned by tests/unit/test_workflow_figures_drift_alert.py:
@@ -19,7 +28,10 @@
 #     discover it from a git remote (first real run died on "fatal: not a
 #     git repository" until this was set);
 #   - never triggered by pull_request — an issues:write token must not be
-#     reachable from fork PRs.
+#     reachable from fork PRs;
+#   - escalation rides that same token: label management is part of the
+#     issues API surface, so no permission beyond actions:read +
+#     issues:write is ever added for it.
 name: figures-drift-alert
 
 on:
@@ -47,11 +59,64 @@ jobs:
       GH_REPO: ${{ github.repository }}   # no checkout: tell gh which repo to act on
       DRIFT_WORKFLOW: figures-drift.yml
       ISSUE_MARKER: figures-drift
+      # The repository's only assignable user: the assignee is what puts the
+      # issue in a person's queue instead of only in the tracker.
+      ALERT_ASSIGNEE: shailendra6969
+      # Severity of any open drift alert; created on demand (idempotent
+      # --force) and re-asserted weekly, so triage edits are restored.
+      SEVERITY_LABEL: "severity: high"
+      # Four weekly checks: the issue is created on the first failing check
+      # and any green week closes it, so its open age IS the run of
+      # consecutive weekly failures — 28 days = the fourth.
+      ESCALATE_AFTER_DAYS: "28"
 
     steps:
-      - name: Open, refresh or close the drift alert issue
+      - name: Open, refresh, escalate or close the drift alert issue
         run: |
           set -euo pipefail
+
+          TITLE="[${ISSUE_MARKER}] report figures no longer match production"
+
+          # Triage: an alert nobody owns is an alert nobody acts on. The
+          # severity label is made on demand (idempotent --force), then the
+          # label and the assignee are asserted together on BOTH paths that
+          # touch a failing issue — creation and the weekly refresh — so an
+          # issue opened before this step existed (or one whose triage was
+          # edited by hand) is corrected on the next run.
+          triage() {
+            gh label create "$SEVERITY_LABEL" --force --color D93F0B \
+              --description "committed report no longer matches production"
+            gh issue edit "$1" --add-label "$SEVERITY_LABEL" \
+              --add-assignee "$ALERT_ASSIGNEE"
+          }
+
+          # Escalation: four consecutive weekly failures. The age and
+          # createdAt are handed in from the refresh below — the issue was
+          # created on the first failing check and any green week closes it,
+          # so 28 open days means every weekly check since creation found
+          # the guard red. Measured once per run, so the digest comment and
+          # this escalation can never report different durations. Label +
+          # retitle, once: the label is the visible escalation and doubles
+          # as the guard against repeating it, and the marker stays in the
+          # title so the dedupe search still finds this issue.
+          escalate() {
+            issue=$1
+            created=$2
+            age_days=$3
+            if [ "$age_days" -lt "$ESCALATE_AFTER_DAYS" ]; then
+              return 0
+            fi
+            already=$(gh issue view "$issue" --json labels \
+              --jq '[.labels[].name] | index("escalated") // empty')
+            if [ -n "$already" ]; then
+              return 0
+            fi
+            gh label create escalated --force --color B60205 \
+              --description "figures-drift red for 4+ consecutive weekly checks"
+            gh issue edit "$issue" --add-label escalated --title "[ESCALATED] ${TITLE}"
+            gh issue comment "$issue" --body \
+              "Escalated: open since ${created} — ${age_days} days with the guard still red (4+ consecutive weekly failures). Newest run: ${run_url}"
+          }
 
           # Latest COMPLETED run of the guard (in-progress runs are ignored).
           run_json=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${DRIFT_WORKFLOW}/runs?status=completed&per_page=1")
@@ -85,12 +150,37 @@ jobs:
           EOF
               )
               if [ -n "$open_issue" ]; then
-                gh issue comment "$open_issue" --body \
-                  "Still failing as of ${run_date}: ${run_url}"
+                # Weekly digest: how long the drift has persisted. The open
+                # issue's own age IS the streak (created on the first
+                # failing check, closed by any green one), so measure it
+                # once here, say it in the comment, and hand the same
+                # numbers to escalate() so the two can never disagree.
+                created=$(gh issue view "$open_issue" --json createdAt --jq .createdAt)
+                age_days=$(( ( $(date -u +%s) - $(date -u -d "$created" +%s) ) / 86400 ))
+                days="${age_days} days"
+                if [ "$age_days" -eq 1 ]; then
+                  days="1 day"
+                fi
+                weeks=$(( age_days / 7 ))
+                if [ "$weeks" -eq 1 ]; then
+                  span="1 week"
+                else
+                  span="${weeks} weeks"
+                fi
+                digest=$(cat <<EOF
+          Still failing as of ${run_date}: ${run_url}
+          
+          Weekly digest: this drift has persisted ${days} (${span}) — the guard has been red without interruption since ${created}.
+          EOF
+          )
+                gh issue comment "$open_issue" --body "$digest"
+                triage "$open_issue"
+                escalate "$open_issue" "$created" "$age_days"
               else
-                gh issue create \
-                  --title "[${ISSUE_MARKER}] report figures no longer match production" \
-                  --body "$body"
+                new_issue=$(gh issue create \
+                  --title "$TITLE" \
+                  --body "$body")
+                triage "${new_issue##*/}"
               fi
               ;;
             *)
