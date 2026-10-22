@@ -56,7 +56,14 @@ concurrency:
 jobs:
   report-figures-vs-production:
     name: report figures vs production replica (read-only, fails on drift)
-    runs-on: ubuntu-latest
+    # Self-hosted: production here IS the operator's local Postgres
+    # (localhost:5432) — a GitHub-hosted runner could never reach it, and
+    # exposing the database to the internet just for CI would trade a red job
+    # for a real security hole. The registered macOS runner (`mac-pharmasignal`)
+    # lives on the same machine as the data. Safe for a runner outside the
+    # sandbox: this workflow triggers only on schedule/workflow_dispatch, so
+    # no fork-PR code can ever execute here.
+    runs-on: [self-hosted, macOS]
     # The §7.5 screen pass alone takes ~90 s on the full 2.8 M-case
     # background; a slower replica still fits comfortably in 30 minutes.
     timeout-minutes: 30

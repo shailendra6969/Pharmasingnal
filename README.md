@@ -164,7 +164,13 @@ actually serves — exit 1 lists every drifted row, exit 2 (unreachable
 database) is also red, because an unverifiable guard is not a pass. It is the
 only workflow allowed to hold a production credential: it needs the
 `PRODUCTION_REPLICA_DATABASE_URL` repository secret (a read-only role) and
-fails loudly when that secret is absent. Independently of the role, every
+fails loudly when that secret is absent. The job runs on a **self-hosted
+macOS runner** (`mac-pharmasignal`, `runs-on: [self-hosted, macOS]`) because
+production here is the operator's local Postgres on `localhost:5432`, which a
+GitHub-hosted runner could not reach — and the database must never be exposed
+to the internet just to satisfy CI. Only `schedule`/`workflow_dispatch`
+trigger this workflow, so no fork-PR code ever runs on that self-hosted
+runner. Independently of the role, every
 connection in the check step is forced read-only server-side
 (`PGOPTIONS="-c default_transaction_read_only=on"`), so even a future script
 regression cannot write to production from CI. A second, independent gate in
