@@ -41,6 +41,8 @@ class InvestigationState:
     drug: str
     event: str
     mode: str = "all"
+    investigation_type: str = "comprehensive"  # "comprehensive" | "numeric_only"
+    require_label_evidence: bool = True
     database_conn: Any = None
     signal_data: dict[str, Any] | None = None
     retrieved_chunks: list[dict[str, Any]] = field(default_factory=list)
@@ -59,16 +61,42 @@ class InvestigationWorkflow:
     def __init__(self, conn: Any = None) -> None:
         self.conn = conn
 
-    def run(self, drug: str, event: str, mode: str = "all", conn: Any = None) -> dict[str, Any]:
-        """Execute the investigation workflow from start to finish."""
+    def run(
+        self,
+        drug: str,
+        event: str,
+        mode: str = "all",
+        conn: Any = None,
+        investigation_type: str = "comprehensive",
+        require_label_evidence: bool | None = None,
+    ) -> dict[str, Any]:
+        """Execute the investigation workflow from start to finish.
+
+        Args:
+            drug: Target canonical drug name (e.g. 'ATORVASTATIN').
+            event: Adverse event MedDRA term (e.g. 'RHABDOMYOLYSIS').
+            mode: Screening mode ('all' or 'primary_suspect').
+            conn: Optional database connection (uses self.conn if omitted).
+            investigation_type: 'comprehensive' (requires label evidence) or
+                'numeric_only' (pure disproportionality metrics query).
+            require_label_evidence: Explicit override for evidence requirement.
+        """
         active_conn = conn or self.conn
         if active_conn is None:
             raise ValueError("A database connection is required to run the investigation workflow.")
+
+        req_evidence = (
+            require_label_evidence
+            if require_label_evidence is not None
+            else (investigation_type.lower() != "numeric_only")
+        )
 
         state = InvestigationState(
             drug=drug.strip().upper(),
             event=event.strip().upper(),
             mode=mode,
+            investigation_type=investigation_type,
+            require_label_evidence=req_evidence,
             database_conn=active_conn,
         )
 
@@ -88,7 +116,14 @@ class InvestigationWorkflow:
 
     def _plan_node(self, state: InvestigationState) -> InvestigationState:
         state.trace.append("plan")
-        logger.info("Planning investigation for %s / %s (mode=%s)", state.drug, state.event, state.mode)
+        logger.info(
+            "Planning investigation for %s / %s (mode=%s, type=%s, req_evidence=%s)",
+            state.drug,
+            state.event,
+            state.mode,
+            state.investigation_type,
+            state.require_label_evidence,
+        )
         return state
 
     def _gather_evidence_node(self, state: InvestigationState) -> InvestigationState:
@@ -101,14 +136,19 @@ class InvestigationWorkflow:
             mode=state.mode,
         )
 
-        # 2. Retrieve FDA SPL label chunks via Tool 2 (with section boosting & OTC fallback)
-        state.retrieved_chunks = search_labels(
-            state.database_conn,
-            drug=state.drug,
-            query=state.event,
-            limit=5,
-        )
+        # 2. Retrieve FDA SPL label chunks via Tool 2 if label evidence is required/requested
+        if state.require_label_evidence or state.investigation_type == "comprehensive":
+            state.retrieved_chunks = search_labels(
+                state.database_conn,
+                drug=state.drug,
+                query=state.event,
+                limit=5,
+            )
+        else:
+            state.retrieved_chunks = []
+
         return state
+
 
     def _synthesize_node(self, state: InvestigationState) -> InvestigationState:
         state.trace.append("synthesize")
@@ -189,6 +229,8 @@ class InvestigationWorkflow:
             lines.append(f"The event '{state.event}' was identified in official labeling:")
             for m in label_mentions:
                 lines.append(f"- {m}")
+        elif not state.require_label_evidence:
+            lines.append("Label evidence retrieval omitted for numeric-only query.")
         else:
             lines.append(f"No explicit mention of '{state.event}' found in top retrieved label sections.")
 
@@ -213,12 +255,14 @@ class InvestigationWorkflow:
             citations=state.citations,
             retrieved_chunks=state.retrieved_chunks,
             report_text=state.draft_summary,
+            require_label_evidence=state.require_label_evidence,
         )
         logger.info(
-            "Verification result: passed=%s (claims=%d/%d, citations=%s, causal=%s)",
+            "Verification result: passed=%s (claims=%d/%d, evidence=%s, citations=%s, causal=%s)",
             state.verification.passed,
             state.verification.passed_claims,
             state.verification.total_claims,
+            state.verification.evidence_passed,
             state.verification.citation_passed,
             state.verification.causal_guard_passed,
         )
@@ -243,6 +287,7 @@ class InvestigationWorkflow:
             "drug": state.drug,
             "event": state.event,
             "mode": state.mode,
+            "investigation_type": state.investigation_type,
             "status": status,
             "metrics": {
                 "case_count": state.signal_data.get("a") if state.signal_data else None,
@@ -254,7 +299,13 @@ class InvestigationWorkflow:
             "evidence": {
                 "retrieved_chunks_count": len(state.retrieved_chunks),
                 "citations_count": len(state.citations),
-                "sections_searched": list({c["section"] for c in state.retrieved_chunks}),
+                "sections_searched": list({
+                    c.get("section", "UNKNOWN")
+                    for c in state.retrieved_chunks
+                    if isinstance(c, dict)
+                }),
+                "evidence_required": state.require_label_evidence,
+                "evidence_passed": v.evidence_passed if v else False,
             },
             "summary": state.draft_summary,
             "citations": [
@@ -266,3 +317,4 @@ class InvestigationWorkflow:
             "trace": state.trace,
         }
         return state
+

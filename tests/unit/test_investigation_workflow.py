@@ -167,3 +167,127 @@ def test_investigation_workflow_retry_loop_on_failure(monkeypatch):
     assert "retry" in report["trace"]
     # Final state repaired
     assert report["status"] == "VERIFIED"
+
+
+def test_investigation_workflow_empty_evidence_produces_flagged_with_warnings():
+    signal_dict = {
+        "signal_id": 2,
+        "drug": "IBUPROFEN",
+        "event": "GASTRIC ULCER",
+        "period": "all",
+        "a": 166,
+        "b": 10000,
+        "c": 4000,
+        "d": 2800000,
+        "case_count": 166,
+        "prr": 8.52,
+        "prr_lower": 7.32,
+        "prr_upper": 9.91,
+        "ror": 8.56,
+        "ror_lower": 7.35,
+        "ror_upper": 9.97,
+        "chi_square": 1005.4,
+        "prr_screen": True,
+        "background_n": 2831775,
+        "primary_suspect_mode": False,
+    }
+    # No chunks available (like current production doc_chunks table)
+    conn = MockWorkflowConnection(signal_dict=signal_dict, chunks=[])
+    workflow = InvestigationWorkflow(conn=conn)
+
+    report = workflow.run(drug="IBUPROFEN", event="GASTRIC ULCER", investigation_type="comprehensive")
+
+    assert report["status"] == "FLAGGED_WITH_WARNINGS"
+    assert report["verification"]["passed"] is False
+    assert report["verification"]["evidence"]["passed"] is False
+    assert len(report["verification"]["evidence"]["errors"]) > 0
+
+
+def test_investigation_workflow_numeric_only_passes_without_label_evidence():
+    signal_dict = {
+        "signal_id": 2,
+        "drug": "IBUPROFEN",
+        "event": "GASTRIC ULCER",
+        "period": "all",
+        "a": 166,
+        "b": 10000,
+        "c": 4000,
+        "d": 2800000,
+        "case_count": 166,
+        "prr": 8.52,
+        "prr_lower": 7.32,
+        "prr_upper": 9.91,
+        "ror": 8.56,
+        "ror_lower": 7.35,
+        "ror_upper": 9.97,
+        "chi_square": 1005.4,
+        "prr_screen": True,
+        "background_n": 2831775,
+        "primary_suspect_mode": False,
+    }
+    conn = MockWorkflowConnection(signal_dict=signal_dict, chunks=[])
+    workflow = InvestigationWorkflow(conn=conn)
+
+    report = workflow.run(drug="IBUPROFEN", event="GASTRIC ULCER", investigation_type="numeric_only")
+
+    assert report["status"] == "VERIFIED"
+    assert report["investigation_type"] == "numeric_only"
+    assert report["evidence"]["evidence_required"] is False
+    assert report["verification"]["passed"] is True
+    assert report["verification"]["evidence"]["passed"] is True
+
+
+def test_investigation_workflow_causal_statement_fails_verification(monkeypatch):
+    signal_dict = {
+        "signal_id": 1,
+        "drug": "ATORVASTATIN",
+        "event": "RHABDOMYOLYSIS",
+        "period": "all",
+        "a": 909,
+        "b": 65298,
+        "c": 4134,
+        "d": 2761434,
+        "case_count": 909,
+        "prr": 9.18,
+        "prr_lower": 8.55,
+        "prr_upper": 9.86,
+        "ror": 9.30,
+        "ror_lower": 8.65,
+        "ror_upper": 10.00,
+        "chi_square": 5437.8,
+        "prr_screen": True,
+        "background_n": 2831775,
+        "primary_suspect_mode": False,
+    }
+    chunk = {
+        "chunk_id": "atorv_0001",
+        "drug": "ATORVASTATIN",
+        "doc_type": "SPL_LABEL",
+        "section": "WARNINGS_AND_PRECAUTIONS",
+        "subsection": "5.1 Myopathy and Rhabdomyolysis",
+        "text": "LIPITOR may cause myopathy and rhabdomyolysis in treated patients.",
+        "source_url": "https://dailymed.example.com",
+        "document_date": "2024-04-15",
+        "chunk_index": 1,
+        "metadata": {"set_id": "set-123"},
+    }
+    conn = MockWorkflowConnection(signal_dict=signal_dict, chunks=[chunk])
+    workflow = InvestigationWorkflow(conn=conn)
+
+    # Monkeypatch synthesize to inject direct causal assertion
+    orig_synth = workflow._synthesize_node
+
+    def causal_synth(state: InvestigationState) -> InvestigationState:
+        state = orig_synth(state)
+        state.draft_summary += "\nIbuprofen causes gastric ulcer."
+        return state
+
+    monkeypatch.setattr(workflow, "_synthesize_node", causal_synth)
+
+    report = workflow.run(drug="ATORVASTATIN", event="RHABDOMYOLYSIS")
+
+    assert report["status"] == "FLAGGED_WITH_WARNINGS"
+    assert report["verification"]["passed"] is False
+    assert report["verification"]["causal_guard"]["passed"] is False
+    assert any("causes gastric" in v for v in report["verification"]["causal_guard"]["violations"])
+
