@@ -33,6 +33,62 @@ SCIENTIFIC_DISCLAIMER = (
     "not clinical causality, true incidence rates, or biological risk probability."
 )
 
+_SENTENCE_TERMINATORS = (". ", "! ", "? ")
+
+
+def derive_structured_claims(
+    drug: str,
+    event: str,
+    signal_data: dict[str, Any] | None,
+) -> list[StructuredClaim]:
+    """Build the authoritative structured claims for a drug/event pair.
+
+    Shared by the synthesis node and the evaluation harness so both derive
+    exactly the same claim set from the same database record.
+    """
+    if not signal_data:
+        return []
+    claims: list[StructuredClaim] = []
+    for metric, key in (
+        ("case_count", "a"),
+        ("prr", "prr"),
+        ("ror", "ror"),
+        ("chi_square", "chi_square"),
+        ("background_n", "background_n"),
+    ):
+        if signal_data.get(key) is not None:
+            claims.append(StructuredClaim(drug, event, metric, float(signal_data[key])))
+    return claims
+
+
+def extract_citation_snippet(text: str, matched_terms: list[str] | None) -> str | None:
+    """Return a verbatim sentence containing the first matched term.
+
+    The quoted span always starts at a sentence boundary (never mid-clause),
+    so citations read correctly in the report while staying verbatim for the
+    citation checker. Falls back to the first 150 characters of the chunk when
+    no complete sentence qualifies.
+    """
+    if not text:
+        return None
+    for term in matched_terms or []:
+        idx = text.lower().find(term.lower())
+        if idx == -1:
+            continue
+        start = -1
+        for marker in _SENTENCE_TERMINATORS:
+            pos = text.rfind(marker, 0, idx)
+            if pos > start:
+                start = pos
+        start = 0 if start < 0 else start + 2
+        end = text.find(".", idx)
+        end = len(text) if end == -1 else end + 1
+        candidate = text[start:end].strip().lstrip(",;:").strip()
+        if 10 <= len(candidate) <= 300:
+            return candidate
+    stripped = text.strip()
+    return stripped[:150] if stripped else None
+
 
 @dataclass
 class InvestigationState:
@@ -126,7 +182,9 @@ class InvestigationWorkflow:
         )
         return state
 
-    def _gather_evidence_node(self, state: InvestigationState) -> InvestigationState:
+    def _gather_evidence_node(
+        self, state: InvestigationState, limit: int = 5
+    ) -> InvestigationState:
         state.trace.append("gather_evidence")
         # 1. Retrieve disproportionality metrics via Tool 1
         state.signal_data = get_signal_scores(
@@ -142,7 +200,7 @@ class InvestigationWorkflow:
                 state.database_conn,
                 drug=state.drug,
                 query=state.event,
-                limit=5,
+                limit=limit,
             )
         else:
             state.retrieved_chunks = []
@@ -152,22 +210,10 @@ class InvestigationWorkflow:
 
     def _synthesize_node(self, state: InvestigationState) -> InvestigationState:
         state.trace.append("synthesize")
-        claims: list[StructuredClaim] = []
-        citations: list[Citation] = []
 
         # Formulate structured claims from authoritative signal data
-        if state.signal_data:
-            sig = state.signal_data
-            if sig.get("a") is not None:
-                claims.append(StructuredClaim(state.drug, state.event, "case_count", float(sig["a"])))
-            if sig.get("prr") is not None:
-                claims.append(StructuredClaim(state.drug, state.event, "prr", float(sig["prr"])))
-            if sig.get("ror") is not None:
-                claims.append(StructuredClaim(state.drug, state.event, "ror", float(sig["ror"])))
-            if sig.get("chi_square") is not None:
-                claims.append(StructuredClaim(state.drug, state.event, "chi_square", float(sig["chi_square"])))
-            if sig.get("background_n") is not None:
-                claims.append(StructuredClaim(state.drug, state.event, "background_n", float(sig["background_n"])))
+        claims = derive_structured_claims(state.drug, state.event, state.signal_data)
+        citations: list[Citation] = []
 
         # Formulate citations from top retrieved chunks
         label_mentions = []
@@ -178,21 +224,8 @@ class InvestigationWorkflow:
             subsec = chunk.get("subsection") or ""
             c_id = chunk.get("chunk_id", "")
 
-            # Extract a brief verbatim sentence or clause containing the matched term
-            snippet = None
-            if matched and text:
-                for term in matched:
-                    idx = text.lower().find(term.lower())
-                    if idx != -1:
-                        start = max(0, text.rfind(".", 0, idx) + 1)
-                        end = text.find(".", idx)
-                        end = len(text) if end == -1 else end + 1
-                        candidate = text[start:end].strip()
-                        if 10 <= len(candidate) <= 300:
-                            snippet = candidate
-                            break
-            if not snippet and text:
-                snippet = text[:150].strip()
+            # Verbatim sentence containing the matched term (sentence-aligned)
+            snippet = extract_citation_snippet(text, matched)
 
             if snippet and c_id:
                 citations.append(Citation(chunk_id=c_id, quoted_span=snippet))
@@ -275,7 +308,10 @@ class InvestigationWorkflow:
             "Verification failed on attempt 1. Repairing draft (retry %d)...",
             state.retry_count,
         )
-        # Re-run synthesis with corrected claims and citations
+        # Re-gather evidence with a wider retrieval window so the retry works
+        # from fresh, broader label context instead of the identical inputs,
+        # then re-run synthesis and verification against it.
+        state = self._gather_evidence_node(state, limit=10)
         return self._synthesize_node(state)
 
     def _finalize_node(self, state: InvestigationState) -> InvestigationState:
