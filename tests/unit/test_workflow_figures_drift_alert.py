@@ -15,7 +15,8 @@ test_workflow_figures_drift.py:
    and never runs the check itself (no database access from this job);
 5. issue lifecycle: exactly one open issue per ongoing failure — created
    once, refreshed with a weekly digest comment (how long the drift has
-   persisted) plus the newest run link, closed when the guard is green;
+   persisted) plus the newest run link, closed when the guard is green with
+   a comment stating how long the drift lasted;
    a repository with no completed runs must produce no issue at all;
 6. escalation: once the open issue has survived four consecutive weekly
    failures (28 days open — the issue's own age, since any green week closes
@@ -28,7 +29,10 @@ test_workflow_figures_drift.py:
 8. weekly digest: each failing refresh states how long the drift has
    persisted — measured from the open issue's own createdAt, the same age
    handed to escalation, so the two comments can never disagree — and only
-   when a failing issue already exists (never at creation, never on green).
+   when a failing issue already exists (never at creation, never on green);
+9. green close: the closing comment states how long the drift lasted —
+   measured the same way as the digest (the issue's own age), pluralized,
+   and only ever on green, only when an open issue exists to close.
 """
 from __future__ import annotations
 
@@ -337,3 +341,39 @@ def test_the_escalation_reuses_the_digests_age_instead_of_refetching():
     assert 'escalate "$open_issue" "$created" "$age_days"' in branch
     assert "createdAt" not in _escalation_body(), \
         "escalate() must use the age it is given, not re-read the issue"
+
+
+# ---------------------------------------------------------------------------
+# 9. Green close: the comment says how long the drift lasted before clearing.
+# ---------------------------------------------------------------------------
+
+def _success_branch() -> str:
+    """The success case body, through its `;;`."""
+    text = _text()
+    return text.split("success)", 1)[1].split(";;", 1)[0]
+
+
+def test_the_green_close_comment_states_how_long_the_drift_lasted():
+    branch = _success_branch()
+    assert "The drift lasted ${days} (${span})" in branch, \
+        "closing must record the duration the tracker just lived through"
+
+
+def test_the_close_duration_measures_the_issue_the_same_way_as_the_digest():
+    """Same source (the issue's own createdAt), same arithmetic, same
+    pluralization — a close and a digest for one issue can't disagree."""
+    branch = _success_branch()
+    assert 'gh issue view "$open_issue" --json createdAt' in branch
+    assert 'date -u -d "$created"' in branch
+    assert 'days="${age_days} days"' in branch
+    assert 'days="1 day"' in branch
+    assert 'span="1 week"' in branch
+
+
+def test_the_close_runs_only_on_green_and_only_for_an_open_issue():
+    branch = _success_branch()
+    assert 'if [ -n "$open_issue" ]; then' in branch, \
+        "no open issue, nothing to close and nothing to say"
+    assert "gh issue create" not in branch, "a green week never creates an issue"
+    assert "gh label" not in branch and "gh issue edit" not in branch, \
+        "closing is a comment, never a mutation of labels or title"

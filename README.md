@@ -187,7 +187,8 @@ one open GitHub issue per ongoing failure — created on the first failing
 check, refreshed while it keeps failing with a weekly digest comment stating
 how long the drift has persisted (the issue's own age in days and full
 weeks, uninterrupted since creation) plus the newest run link, and closed
-automatically once the guard is green again. Every failing issue is also
+automatically once the guard is green again — the close comment stating
+how long the drift lasted before it cleared. Every failing issue is also
 triaged into a queue — a `severity: high` label (created on demand) plus the
 repository's assignee — asserted when the issue opens and re-asserted at
 every refresh, so it lands in someone's assigned-issues view rather than

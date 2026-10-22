@@ -16,7 +16,8 @@
 #       [ESCALATED] title prefix, applied exactly once (the label is also
 #       what stops week five, six … re-escalating)
 #   latest completed run was green             -> close the open issue with
-#       a note, so the tracker reflects current state; the escalation dies
+#       a note stating how long the drift lasted before it cleared, so the
+#       tracker reflects current state; the escalation dies
 #       with the issue, so the next failure opens a fresh unprefixed one
 #   no completed runs yet (fresh repository)   -> do nothing
 #
@@ -136,8 +137,24 @@ jobs:
           case "$conclusion" in
             success)
               if [ -n "$open_issue" ]; then
+                # The drift is over — say how long it lasted. Same
+                # measurement as the digest: the issue's own age, since it
+                # opened on the first red check and only a green one lands
+                # here, closing it.
+                created=$(gh issue view "$open_issue" --json createdAt --jq .createdAt)
+                age_days=$(( ( $(date -u +%s) - $(date -u -d "$created" +%s) ) / 86400 ))
+                days="${age_days} days"
+                if [ "$age_days" -eq 1 ]; then
+                  days="1 day"
+                fi
+                weeks=$(( age_days / 7 ))
+                if [ "$weeks" -eq 1 ]; then
+                  span="1 week"
+                else
+                  span="${weeks} weeks"
+                fi
                 gh issue close "$open_issue" --comment \
-                  "figures-drift is green again (run ${run_date}): ${run_url} — report figures match production."
+                  "figures-drift is green again (run ${run_date}): ${run_url} — report figures match production. The drift lasted ${days} (${span}) — red without interruption since ${created} until this run."
               fi
               ;;
             failure|timed_out|cancelled)
