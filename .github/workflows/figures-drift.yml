@@ -71,6 +71,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # GitHub-hosted images pre-set RUNNER_TOOL_CACHE machine-wide; self-hosted
+      # runners don't, and actions/setup-python then falls back to its hardcoded
+      # /Users/runner/hostedtoolcache — mkdir there dies with "Permission denied"
+      # on this machine (first self-hosted run, 39751310831). Point it at a
+      # writable, checkout-proof path under the runner's _work directory
+      # instead; GITHUB_ENV hands it to every later step, the action's post
+      # step included.
+      - name: Tool cache location (self-hosted runner has no default)
+        run: echo "RUNNER_TOOL_CACHE=${RUNNER_WORKSPACE}/hostedtoolcache" >> "$GITHUB_ENV"
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
