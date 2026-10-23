@@ -218,6 +218,8 @@ class InvestigationWorkflow:
         # Formulate citations from top retrieved chunks
         label_mentions = []
         for chunk in state.retrieved_chunks[:2]:
+            if not isinstance(chunk, dict):
+                continue
             text = chunk.get("text", "")
             matched = chunk.get("matched_terms", [])
             sec = chunk.get("section", "")
@@ -336,7 +338,7 @@ class InvestigationWorkflow:
                 "retrieved_chunks_count": len(state.retrieved_chunks),
                 "citations_count": len(state.citations),
                 "sections_searched": list({
-                    c.get("section", "UNKNOWN")
+                    c.get("section") or "UNKNOWN"
                     for c in state.retrieved_chunks
                     if isinstance(c, dict)
                 }),

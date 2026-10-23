@@ -17,14 +17,17 @@ class MockWorkflowCursor:
     def __init__(self, signal_dict: dict | None, chunks: list[dict]):
         self.signal_dict = signal_dict
         self.chunks = chunks
+        self._last_query = ""
 
     def execute(self, query: str, params: tuple = ()):
-        pass
+        self._last_query = query
 
     def fetchone(self):
         return self.signal_dict
 
     def fetchall(self):
+        if "signal_quarterly" in self._last_query:
+            return []
         return self.chunks
 
     def __enter__(self):
@@ -393,4 +396,87 @@ def test_retry_regathers_evidence_with_wider_window(monkeypatch):
     assert gather_limits == [5, 10]
     assert report["trace"].count("gather_evidence") == 2
     assert report["status"] == "VERIFIED"
+
+
+def test_investigation_workflow_fails_when_signal_data_is_none():
+    # Unknown drug/event pair in comprehensive mode must return FLAGGED_WITH_WARNINGS, never VERIFIED
+    conn = MockWorkflowConnection(signal_dict=None, chunks=[])
+    workflow = InvestigationWorkflow(conn=conn)
+
+    report = workflow.run(drug="UNKNOWN_DRUG", event="UNKNOWN_EVENT", investigation_type="comprehensive")
+
+    assert report["status"] == "FLAGGED_WITH_WARNINGS"
+    assert report["status"] != "VERIFIED"
+    assert report["verification"]["passed"] is False
+    assert report["metrics"]["case_count"] is None
+    assert report["metrics"]["prr"] is None
+    assert report["metrics"]["screened"] is False
+    # Claims verification should indicate signal not found
+    claim_details = report["verification"]["claims"]["details"]
+    assert any("Signal not found" in d.get("reason", "") for d in claim_details)
+
+
+def test_investigation_workflow_numeric_only_fails_when_signal_data_is_none():
+    # Unknown drug/event pair in numeric-only mode must return FLAGGED_WITH_WARNINGS, never VERIFIED
+    conn = MockWorkflowConnection(signal_dict=None, chunks=[])
+    workflow = InvestigationWorkflow(conn=conn)
+
+    report = workflow.run(drug="UNKNOWN_DRUG", event="UNKNOWN_EVENT", investigation_type="numeric_only")
+
+    assert report["status"] == "FLAGGED_WITH_WARNINGS"
+    assert report["status"] != "VERIFIED"
+    assert report["verification"]["passed"] is False
+    assert report["verification"]["claims"]["passed"] == 0
+    assert report["verification"]["claims"]["failed"] > 0
+    claim_details = report["verification"]["claims"]["details"]
+    assert any("Signal not found" in d.get("reason", "") for d in claim_details)
+
+
+def test_investigation_workflow_handles_malformed_chunks_safely(monkeypatch):
+    signal_dict = {
+        "signal_id": 1,
+        "drug": "ATORVASTATIN",
+        "event": "RHABDOMYOLYSIS",
+        "period": "all",
+        "a": 909,
+        "b": 65298,
+        "c": 4134,
+        "d": 2761434,
+        "case_count": 909,
+        "prr": 9.18,
+        "prr_lower": 8.55,
+        "prr_upper": 9.86,
+        "ror": 9.30,
+        "ror_lower": 8.65,
+        "ror_upper": 10.00,
+        "chi_square": 5437.8,
+        "prr_screen": True,
+        "background_n": 2831775,
+        "primary_suspect_mode": False,
+    }
+    # List containing None, non-dict, chunk without section, chunk with None section
+    malformed_chunks = [
+        None,
+        "not a mapping",
+        42,
+        {"chunk_id": "c_missing_sec", "text": "Sample text without section."},
+        {"chunk_id": "c_none_sec", "section": None, "text": "Sample text with None section."},
+        {
+            "chunk_id": "atorv_0001",
+            "section": "WARNINGS_AND_PRECAUTIONS",
+            "text": "LIPITOR may cause myopathy and rhabdomyolysis in treated patients.",
+        },
+    ]
+    conn = MockWorkflowConnection(signal_dict=signal_dict, chunks=[])
+    workflow = InvestigationWorkflow(conn=conn)
+    monkeypatch.setattr("app.agents.investigation.search_labels", lambda *a, **kw: malformed_chunks)
+
+    # Workflow must complete without raising TypeError, KeyError, or AttributeError
+    report = workflow.run(drug="ATORVASTATIN", event="RHABDOMYOLYSIS")
+
+    assert report is not None
+    assert "UNKNOWN" in report["evidence"]["sections_searched"]
+    assert "WARNINGS_AND_PRECAUTIONS" in report["evidence"]["sections_searched"]
+    assert None not in report["evidence"]["sections_searched"]
+
 

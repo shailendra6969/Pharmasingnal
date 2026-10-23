@@ -137,8 +137,9 @@ def test_causal_language_guard_rejects_causal_certainty():
 
 def test_causal_language_guard_rejects_direct_assertions_and_variants():
     direct_assertions = [
-        "Ibuprofen causes gastric ulcer.",
-        "Gastric ulcer is caused by ibuprofen.",
+        "Ibuprofen causes gastric ulcers.",
+        "Gastric ulcers are caused by ibuprofen.",
+        "The data does not prove causation, but ibuprofen causes gastric ulcers.",
         "The evidence proves that ibuprofen is harmful.",
         "This establishes that the drug causes the event.",
         "Adverse event reports prove that the drug is harmful.",
@@ -153,7 +154,14 @@ def test_causal_language_guard_rejects_direct_assertions_and_variants():
 
 def test_causal_language_guard_allows_safe_negations_and_modals():
     safe_texts = [
-        "Spontaneous reporting reflects voluntary postmarket signals and does not establish clinical causality or true incidence rates.",
+        "The cause is unknown.",
+        "Common causes include stress.",
+        "The potential to cause reactions exists.",
+        "It is unlikely to cause adverse events.",
+        "The drug may potentially cause gastric ulcers.",
+        "The drug can also cause reactions.",
+        "Spontaneous reporting does not establish clinical causality or true incidence rates.",
+        "The causes of gastric ulcer are multifactorial.",
         "LIPITOR may cause myopathy and rhabdomyolysis in treated patients.",
         "Ibuprofen can cause severe stomach bleeding.",
         "FAERS data does not prove that ibuprofen causes gastric ulcer.",
@@ -171,6 +179,35 @@ def test_causal_language_guard_allows_safe_negations_and_modals():
         assert violations == []
 
 
+def test_verify_numeric_claims_fails_when_signal_data_is_none():
+    # Both with claims and with empty claims, missing signal data must fail
+    passed_with_claims, _, f_cnt1, details1 = verify_numeric_claims(
+        [StructuredClaim("UNKNOWN", "EVENT", "prr", 2.0)], None
+    )
+    assert passed_with_claims is False
+    assert f_cnt1 == 1
+    assert "Signal not found" in details1[0]["reason"]
+
+    passed_empty, _, f_cnt2, details2 = verify_numeric_claims([], None)
+    assert passed_empty is False
+    assert f_cnt2 == 1
+    assert "Signal not found" in details2[0]["reason"]
+
+
+def test_verify_numeric_claims_empty_claims_requirement():
+    # When required, empty claims must fail
+    passed_req, _, f_cnt, details = verify_numeric_claims([], SAMPLE_SIGNAL_DATA, require_claims=True)
+    assert passed_req is False
+    assert f_cnt == 1
+    assert "No structured claims provided" in details[0]["reason"]
+
+    # When not required, empty claims pass
+    passed_opt, p_cnt, f_cnt_opt, _ = verify_numeric_claims([], SAMPLE_SIGNAL_DATA, require_claims=False)
+    assert passed_opt is True
+    assert p_cnt == 0
+    assert f_cnt_opt == 0
+
+
 def test_verify_citations_empty_citations_behavior():
     # When required, empty citations must fail
     passed_req, errors_req = verify_citations([], SAMPLE_CHUNKS, require_citations=True)
@@ -181,6 +218,22 @@ def test_verify_citations_empty_citations_behavior():
     passed_opt, errors_opt = verify_citations([], SAMPLE_CHUNKS, require_citations=False)
     assert passed_opt is True
     assert errors_opt == []
+
+
+def test_verify_citations_handles_none_and_malformed_chunks_safely():
+    malformed_chunks = [
+        None,
+        "not a dict",
+        {"chunk_id": "chunk_001", "text": "myopathy and rhabdomyolysis"},
+        {"no_chunk_id": "bad"},
+    ]
+    citations = [
+        Citation("chunk_001", "myopathy and rhabdomyolysis"),
+    ]
+    # Should not raise TypeError and successfully match the valid chunk
+    passed, errors = verify_citations(citations, malformed_chunks)
+    assert passed is True
+    assert errors == []
 
 
 def test_full_investigation_report_verification_success():
@@ -230,6 +283,24 @@ def test_investigation_report_fails_when_evidence_is_absent():
     assert any("No label citations provided" in e for e in res.evidence_errors)
 
 
+def test_investigation_report_fails_when_signal_data_is_none():
+    citations = [
+        Citation("chunk_001", "myopathy and rhabdomyolysis"),
+    ]
+    # Missing signal data (unknown drug/event pair)
+    res = verify_investigation_report(
+        claims=[],
+        signal_data=None,
+        citations=citations,
+        retrieved_chunks=SAMPLE_CHUNKS,
+        report_text="Signal investigation for UNKNOWN / PAIR.",
+        require_label_evidence=True,
+    )
+    assert res.passed is False
+    assert res.claim_details[0]["passed"] is False
+    assert "Signal not found" in res.claim_details[0]["reason"]
+
+
 def test_investigation_report_passes_for_numeric_only_without_label_evidence():
     claims = [
         StructuredClaim("ATORVASTATIN", "RHABDOMYOLYSIS", "case_count", 909),
@@ -271,4 +342,5 @@ def test_investigation_report_fails_on_causal_assertion():
     assert res.passed is False
     assert res.causal_guard_passed is False
     assert any("causes rhabdomyolysis" in v for v in res.causal_violations)
+
 

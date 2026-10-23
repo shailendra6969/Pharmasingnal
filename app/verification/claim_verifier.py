@@ -379,7 +379,7 @@ def verify_investigation_report(
     )
 
     # 2. Evidence presence check
-    chunks_list = retrieved_chunks or []
+    chunks_list = [c for c in (retrieved_chunks or []) if isinstance(c, dict)]
     citations_list = citations or []
     evidence_errors: list[str] = []
 
