@@ -4,9 +4,16 @@
 Downloads, parses, and loads section-aware plain-text label chunks into PostgreSQL:
 
     python scripts/ingest_labels.py                       # all focus drugs
-    python scripts/ingest_labels.py --drug ATORVASTATIN   # single drug
+    python scripts/ingest_labels.py --drug ATORVASTATIN   # single curated drug
+    python scripts/ingest_labels.py --drug ASPIRIN        # any drug: set_id auto-discovered
+    python scripts/ingest_labels.py --drug A --drug B     # repeatable: a whole batch
     python scripts/ingest_labels.py --file path/to/label.xml --drug ATORVASTATIN
     python scripts/ingest_labels.py --dry-run             # inspect chunks without saving
+
+Exit codes:
+    0  every requested drug ingested
+    2  at least one drug could not be resolved, downloaded or parsed (the
+       rest of the batch still ingests — a partial run reports itself red)
 
 Safety & Invariants:
 - Strictly plain text (no pgvector / embedding dependencies).
@@ -61,9 +68,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Ingest FDA DailyMed SPL labels into doc_chunks")
     parser.add_argument(
         "--drug",
-        choices=list(DEFAULT_FOCUS_DRUG_SPLS.keys()),
+        action="append",
         default=None,
-        help="Target focus drug (default: all configured focus drugs)",
+        help=(
+            "Generic drug name, repeatable for a batch (default: all configured "
+            "focus drugs). Any name works: drugs without a curated set_id are "
+            "looked up on DailyMed."
+        ),
     )
     parser.add_argument(
         "--set-id",
@@ -99,33 +110,58 @@ def main(argv: list[str] | None = None) -> int:
     if not args.dry_run:
         conn = loader.connect(db_url)
 
-    target_drugs = [args.drug] if args.drug else list(DEFAULT_FOCUS_DRUG_SPLS.keys())
+    target_drugs = args.drug or list(DEFAULT_FOCUS_DRUG_SPLS.keys())
     total_chunks = 0
+    failures: list[str] = []
 
     try:
         if args.file:
-            drug = args.drug or "UNKNOWN"
+            drug = (args.drug[0] if args.drug else "UNKNOWN") or "UNKNOWN"
             print(f"Ingesting local SPL file {args.file} for drug={drug}...")
             content = args.file.read_text(encoding="utf-8")
             n, _ = ingest_label(conn, drug, content, source_url=str(args.file), dry_run=args.dry_run)
             total_chunks += n
         else:
-            print(f"Ingesting DailyMed SPL labels for {len(target_drugs)} focus drugs...")
+            print(f"Ingesting DailyMed SPL labels for {len(target_drugs)} drug(s)...")
             for drug in target_drugs:
+                drug = drug.strip().upper()
                 config = DEFAULT_FOCUS_DRUG_SPLS.get(drug, {})
                 set_id = args.set_id or config.get("set_id")
+                brand = config.get("brand_name", "")
+
                 if not set_id:
-                    print(f"  [skip] No set_id configured for {drug}")
+                    # Not curated: discover a representative SPL by generic name.
+                    print(f"\nProcessing {drug} (resolving set_id from DailyMed)...")
+                    try:
+                        resolved = client.resolve_set_id(drug)
+                    except Exception as exc:
+                        print(f"  [error] DailyMed search failed for {drug}: {exc}", file=sys.stderr)
+                        failures.append(drug)
+                        continue
+                    if resolved is None:
+                        print(f"  [error] no usable single-ingredient SPL for {drug}", file=sys.stderr)
+                        failures.append(drug)
+                        continue
+                    set_id, title = resolved
+                    brand = brand or title
+                    print(f"  [discover] set_id={set_id} title={title}")
+                else:
+                    print(f"\nProcessing {drug} (brand: {brand}, set_id: {set_id})...")
+
+                try:
+                    _, xml_content = client.download_spl(drug=drug, set_id=set_id, force=args.force)
+                except Exception as exc:
+                    print(f"  [error] download failed for {drug} (set_id={set_id}): {exc}", file=sys.stderr)
+                    failures.append(drug)
                     continue
 
-                brand = config.get("brand_name", "")
-                print(f"\nProcessing {drug} (brand: {brand}, set_id: {set_id})...")
-                _, xml_content = client.download_spl(drug=drug, set_id=set_id, force=args.force)
                 source_url = f"https://dailymed.nlm.nih.gov/dailymed/services/v2/spls/{set_id}.xml"
                 n, _ = ingest_label(conn, drug, xml_content, source_url=source_url, dry_run=args.dry_run)
                 total_chunks += n
 
-        print(f"\nIngestion complete: {total_chunks} total chunks processed across {len(target_drugs)} drugs.")
+        print(f"\nIngestion complete: {total_chunks} total chunks processed across {len(target_drugs)} drug(s).")
+        if failures:
+            print(f"[error] failed to ingest: {', '.join(failures)}", file=sys.stderr)
         if not args.dry_run and conn is not None:
             counts = doc_repository.count_chunks_by_drug(conn)
             print(f"Current doc_chunks totals in database: {counts}")
@@ -133,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
         if conn is not None:
             conn.close()
 
-    return 0
+    return 2 if failures else 0
 
 
 if __name__ == "__main__":
