@@ -1,0 +1,131 @@
+# CI gate for the baseline evaluation set (spec §8, §35).
+#
+#   1. seed a deterministic synthetic dataset (scripts/seed_evaluation.py):
+#      screened signal_scores rows for both pairs under test plus label chunks
+#      for ATORVASTATIN — and deliberately none for PREDNISONE, which is what
+#      makes the missing-evidence case exercise the evidence gate;
+#   2. run scripts/run_evaluation.py against it: the positive control must
+#      verify end to end, and each of the three failure categories (unsupported
+#      claim, incorrect citation, missing evidence) must be rejected.
+#
+# Exit-code contract of the evaluation CLI is the gate itself:
+#   0  every executed case matched its expected outcome (skips allowed)
+#   1  at least one case mismatched  -> job red: an evidence gate regressed
+#   2  configuration/database error  -> job red: an unverifiable run is not a
+#                                       passing run
+#
+# The job holds no credentials of any kind: the database is this run's own
+# ephemeral PostgreSQL service, wiped with the runner. That separation is
+# pinned by tests/unit/test_workflow_evaluation.py — only figures-drift.yml
+# may hold a production credential.
+name: evaluation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "scripts/**"
+      - "migrations/**"
+      - "requirements.txt"
+      - ".github/workflows/evaluation.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "scripts/**"
+      - "migrations/**"
+      - "requirements.txt"
+      - ".github/workflows/evaluation.yml"
+
+concurrency:
+  group: evaluation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evaluation:
+    name: baseline evaluation gates (PostgreSQL ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Same server version as the migration-004 rehearsal: one version the
+        # repository is known to be rehearsed on, bumped deliberately.
+        postgres: ["14"]
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_PASSWORD: postgres
+          # The reachability step connects to the evaluation database, so the
+          # service must create it at startup — otherwise a healthy service
+          # fails the check for want of a database, and the check exists only
+          # to turn a *dead* service red.
+          POSTGRES_DB: pharmasignal_eval
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pharmasignal_eval
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned dependencies
+        run: python -m pip install -r requirements.txt
+
+      # First validation step, credential-free: a runner whose `python` is not
+      # the interpreter that received the pins fails here in seconds, before
+      # any database work (README, "the bootstrap"). Exit 0 = interpreter
+      # complete or armed; 1 = invalid or unresolvable.
+      - name: Interpreter bootstrap self-check (a misconfigured runner fails in seconds)
+        run: python -m app.bootstrap --check
+
+      # The evaluation CLI exits 2 when the database is unreachable — correct
+      # in itself, but a dead service must be red *here*, with a message that
+      # names the cause instead of an opaque evaluation failure.
+      - name: PostgreSQL is reachable (a dead service must fail, not skip)
+        run: |
+          python -c "import psycopg2; from app.config import settings; \
+          conn = psycopg2.connect(settings.database_url()); conn.close(); \
+          print('reachable:', settings.database_url().rsplit('@', 1)[1])"
+
+      - name: Create and migrate the evaluation database
+        run: |
+          python -c "from scripts.create_databases import ensure_database; \
+          from app.config import settings; ensure_database(settings.database_url())"
+          python scripts/migrate.py
+
+      # Deterministic seed: reset-then-insert, so the run scores the same
+      # synthetic dataset whatever the service database happened to contain.
+      - name: Seed the deterministic evaluation dataset
+        run: python scripts/seed_evaluation.py
+
+      # The gate. Exit 1 = a case no longer matches its expected outcome, i.e.
+      # one of the evidence gates (numeric claims against signal_scores,
+      # verbatim citations, the causal guard, the label-evidence requirement)
+      # stopped rejecting what it must reject — or stopped accepting the
+      # positive control. Any non-zero exit fails the job.
+      - name: Evaluation run matches every expected outcome (fails on gate regressions)
+        run: python scripts/run_evaluation.py --json eval-report.json
+
+      # The scored report is written for failing runs too (only exit 2 leaves
+      # no file), so a red job always leaves the per-case evidence behind.
+      - name: Upload the scored evaluation report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-${{ matrix.postgres }}
+          path: eval-report.json
+          if-no-files-found: ignore
